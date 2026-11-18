@@ -22,6 +22,7 @@ mod set_cookie;
 
 pub use cookies::{
     Ambiguous, Iter, MAX_COOKIE_HEADER_BYTES, MAX_COOKIE_PAIRS, Pair, Pairs, Stats, is_valid_name,
+    is_valid_value,
 };
 pub use credentials::{Credentials, resolve};
 pub use error::{Error, Result};

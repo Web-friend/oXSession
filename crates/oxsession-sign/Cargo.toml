@@ -1,0 +1,15 @@
+[package]
+name = "oxsession-sign"
+description = "HMAC-signed cookies for oXSession"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+hmac = "0.12"
+oxsession-core.workspace = true
+sha2 = "0.10"
+subtle = "2"
+zeroize = "1"

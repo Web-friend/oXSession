@@ -13,7 +13,8 @@ OIDC providers, and JWT issuance are next.
 | Crate | Knows about | Must not know about |
 | --- | --- | --- |
 | [`oxsession-core`](crates/oxsession-core) | `Cookie`/`Set-Cookie` wire format, credential resolution, errors | Axum, tokio, SQL, environment variables |
-| [`oxsession-axum`](crates/oxsession-axum) | Request parts, HTTP status mapping | Parsing rules (delegates to core) |
+| [`oxsession-sign`](crates/oxsession-sign) | HMAC-SHA256 signatures, key ids, rotation | Axum, storage, environment variables |
+| [`oxsession-axum`](crates/oxsession-axum) | Request parts, HTTP status mapping | Parsing and signing rules (delegates to core/sign) |
 | [`oxsession-server`](crates/oxsession-server) | Environment configuration, serving | Anything below the adapter |
 
 The rule that keeps this honest: **core never sees a `HeaderMap`, a `Router`, a
@@ -46,6 +47,41 @@ this a platform rather than one application's auth code.
 - `__Secure-` names require `Secure`.
 - `SameSite=None` requires `Secure`.
 - `Path` must be absolute.
+
+## Signed cookies (opt-in)
+
+Signing is a policy decision, not a transport rule: preferences stay unsigned,
+session cookies can be signed. Pass the cookies that matter through a signer.
+
+```rust
+use oxsession_sign::{CookieSigner, KeyId, SecretKey};
+
+let signer = CookieSigner::new(
+    KeyId::new("k1")?,
+    SecretKey::from_slice(&key_bytes)?,      // exactly 32 bytes, zeroized on drop
+);
+
+let wire = signer.sign("session", "dXNlcj00Mg")?;   // "os1.k1.dXNlcj00Mg.<mac>"
+let payload = signer.verify("session", &wire)?;     // bound to the cookie name
+```
+
+On Axum, read and verify in one step:
+
+```rust
+let payload = oxsession_axum::signed_cookie(&cookies, &signer, "session")?;
+```
+
+| Property | Detail |
+| --- | --- |
+| Format | `os1.<keyid>.<payload>.<mac>`, HMAC-SHA256 |
+| Binding | The cookie **name** is signed, so a `session` value cannot be replayed as `admin` |
+| Rotation | Key id travels in the value; up to 2 retired keys keep verifying |
+| Failure | Unsigned, tampered, foreign-name, and unknown-key values are all rejected |
+| Limits | 4096-byte signed value, payload must be cookie-octets with no `.` |
+
+Signing is **not encryption**: the payload is readable by the client. The wire
+format, a test vector, and a 6-line Python reference implementation live in
+[`docs/signing.md`](docs/signing.md).
 
 ## Run
 
@@ -80,6 +116,7 @@ reads the environment:
 | `AUTH_BIND_ADDR` | `127.0.0.1` | IP address to bind to |
 | `AUTH_PORT` | `3000` | TCP port to listen on (1–65535) |
 | `AUTH_SESSION_COOKIE` | `session` | Cookie name holding the session token |
+| `AUTH_COOKIE_KEYS` | unset | `keyid:base64url,keyid:base64url,...`, first entry signs, the rest verify. Unset means session cookies are read as opaque tokens |
 
 No dotenv files are loaded.
 
@@ -91,7 +128,8 @@ cargo test --workspace
 
 35 tests cover the parser's edge cases (quoted values, malformed pairs, duplicate
 names, size and pair limits), prefix rules, credential precedence, and the
-adapter end-to-end through a real router.
+adapter end-to-end through a real router. The signing suite adds the published
+wire vector, tampering matrix, name-binding and rotation cases.
 
 ## Roadmap
 
@@ -100,5 +138,5 @@ adapter end-to-end through a real router.
 2. PostgreSQL adapter, then SQLite, behind the same traits.
 3. Generic OIDC with Google as a preset, including PKCE and `state` handling.
 4. JWT issuance with a JWKS endpoint and key rotation.
-5. Signed/encrypted cookie support.
+5. Sealed (encrypted) cookies — signed cookies already ship in `oxsession-sign`.
 6. Additional adapters (Actix, Hyper, serverless).

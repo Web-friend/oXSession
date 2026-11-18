@@ -218,6 +218,16 @@ pub fn is_valid_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(is_token_byte)
 }
 
+/// Whether `value` can appear as a cookie value, i.e. consists of
+/// cookie-octets (RFC 6265bis section 5.6).
+///
+/// An empty value is valid. This is the check signing needs before treating a
+/// payload as safe to place on the wire.
+#[must_use]
+pub fn is_valid_value(value: &str) -> bool {
+    value.bytes().all(is_cookie_octet)
+}
+
 fn parse_pair(segment: &[u8]) -> Option<Pair<'_>> {
     let segment = trim_ows(segment);
     let equals = segment.iter().position(|byte| *byte == b'=')?;

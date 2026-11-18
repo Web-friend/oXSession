@@ -1,9 +1,9 @@
 //! Axum adapter for oXSession.
 //!
 //! The adapter is intentionally thin: it turns request parts into the neutral
-//! types from [`oxsession_core`] and maps [`oxsession_core::Error`] back into an
-//! HTTP response. Parsing rules live in the core crate, so an Actix or Hyper
-//! adapter cannot drift from this one.
+//! types from [`oxsession_core`] and maps errors back into an HTTP response.
+//! Parsing and signing rules live in the core and signing crates, so an Actix
+//! or Hyper adapter cannot drift from this one.
 
 #![warn(missing_docs)]
 
@@ -19,6 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use oxsession_core::{Credentials, Error, Pairs, SetCookie};
+use oxsession_sign::{CookieSigner, Error as SignError};
 
 /// Every `Cookie` header of a request, joined as RFC 6265 section 5.4 requires.
 ///
@@ -93,30 +94,99 @@ pub fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(AUTHORIZATION)?.to_str().ok()
 }
 
+/// Verify a signed cookie and return its payload.
+///
+/// `Ok(None)` means the cookie is absent. A present but unsigned, tampered, or
+/// foreign-key cookie is an error: verification never falls back to the raw
+/// value.
+///
+/// # Errors
+///
+/// [`AuthError::Credentials`] when the cookie name appears more than once,
+/// [`AuthError::Signature`] when verification fails.
+pub fn signed_cookie<'a>(
+    cookies: &'a CookieHeader,
+    signer: &CookieSigner,
+    name: &str,
+) -> Result<Option<&'a str>, AuthError> {
+    match cookies.pairs().get_unique(name) {
+        Ok(Some(wire)) => signer
+            .verify(name, wire)
+            .map(Some)
+            .map_err(AuthError::Signature),
+        Ok(None) => Ok(None),
+        Err(ambiguous) => Err(AuthError::Credentials(Error::Ambiguous(ambiguous))),
+    }
+}
+
 /// A credential failure, rendered as an HTTP response.
 ///
 /// Mapping:
 ///
-/// | Core error | Status |
+/// | Failure | Status |
 /// | --- | --- |
-/// | [`Error::Unauthenticated`] | `401 Unauthorized` |
-/// | [`Error::Ambiguous`] | `400 Bad Request` |
-/// | anything else | `400 Bad Request` |
+/// | [`Error::Unauthenticated`], any signature failure | `401 Unauthorized` |
+/// | [`Error::Ambiguous`] (duplicate cookie name) | `400 Bad Request` |
+/// | any other malformed credential | `400 Bad Request` |
+///
+/// Signature failures deliberately share one response: telling a client whether
+/// the key was unknown or the MAC was wrong turns the endpoint into a
+/// verification oracle.
 #[derive(Debug)]
-pub struct AuthError(pub Error);
+pub enum AuthError {
+    /// The credential was missing, ambiguous, or malformed.
+    Credentials(Error),
+    /// A signed cookie failed verification.
+    Signature(SignError),
+}
 
-impl From<Error> for AuthError {
-    fn from(error: Error) -> Self {
-        Self(error)
+impl AuthError {
+    /// The underlying failure, for logging.
+    ///
+    /// Never expose this text to clients; the HTTP mapping is deliberately
+    /// coarse.
+    #[must_use]
+    pub fn reason(&self) -> &dyn std::fmt::Display {
+        match self {
+            Self::Credentials(error) => error,
+            Self::Signature(error) => error,
+        }
     }
 }
 
+impl From<Error> for AuthError {
+    fn from(error: Error) -> Self {
+        Self::Credentials(error)
+    }
+}
+
+impl From<SignError> for AuthError {
+    fn from(error: SignError) -> Self {
+        Self::Signature(error)
+    }
+}
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Credentials(error) => write!(formatter, "{error}"),
+            Self::Signature(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for AuthError {}
+
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
-        let (status, message) = match self.0 {
-            Error::Unauthenticated => (StatusCode::UNAUTHORIZED, "authentication required"),
-            Error::Ambiguous(_) => (StatusCode::BAD_REQUEST, "ambiguous credential cookie"),
-            _ => (StatusCode::BAD_REQUEST, "malformed credentials"),
+        let (status, message) = match self {
+            Self::Credentials(Error::Unauthenticated) | Self::Signature(_) => {
+                (StatusCode::UNAUTHORIZED, "authentication required")
+            }
+            Self::Credentials(Error::Ambiguous(_)) => {
+                (StatusCode::BAD_REQUEST, "ambiguous credential cookie")
+            }
+            Self::Credentials(_) => (StatusCode::BAD_REQUEST, "malformed credentials"),
         };
         (status, message).into_response()
     }
@@ -170,12 +240,20 @@ mod tests {
     #[test]
     fn renders_core_errors() {
         assert_eq!(
-            AuthError(Error::Unauthenticated).into_response().status(),
+            AuthError::from(Error::Unauthenticated)
+                .into_response()
+                .status(),
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            AuthError(Error::InvalidCookieName).into_response().status(),
+            AuthError::from(Error::InvalidCookieName)
+                .into_response()
+                .status(),
             StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            AuthError::from(SignError::BadMac).into_response().status(),
+            StatusCode::UNAUTHORIZED
         );
     }
 }

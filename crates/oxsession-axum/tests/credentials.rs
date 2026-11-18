@@ -14,7 +14,7 @@ use tower::ServiceExt;
 async fn whoami(headers: HeaderMap, cookies: CookieHeader) -> Result<&'static str, AuthError> {
     let credentials = cookies
         .credentials(&headers, "session")
-        .map_err(AuthError)?;
+        .map_err(AuthError::from)?;
     Ok(match credentials {
         Credentials::Bearer(_) => "bearer",
         Credentials::Cookie(_) => "cookie",
