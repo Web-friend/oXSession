@@ -83,9 +83,7 @@ impl Config {
 
         let session_delivery = match env::var("AUTH_SESSION_DELIVERY") {
             Ok(value) => value.parse().with_context(|| {
-                format!(
-                    "AUTH_SESSION_DELIVERY must be `cookie`, `token`, or `both`, got {value:?}"
-                )
+                format!("AUTH_SESSION_DELIVERY must be `cookie`, `token`, or `both`, got {value:?}")
             })?,
             Err(env::VarError::NotPresent) => SessionDelivery::Cookie,
             Err(error) => return Err(error).context("AUTH_SESSION_DELIVERY is not valid Unicode"),
@@ -117,8 +115,11 @@ pub enum SessionDelivery {
     /// storing it in `localStorage`, a mobile app, a CLI — and present it as
     /// `Authorization: Bearer`.
     ///
-    /// This trades `HttpOnly` protection for portability: any script able to
-    /// read `localStorage` (including one injected via XSS) can steal the id.
+    /// This is a token-only deployment: no cookie is issued **and** none is
+    /// accepted, so no ambient credential can be attached to a cross-site
+    /// request. This trades `HttpOnly` protection for portability: any script
+    /// able to read `localStorage` (including one injected via XSS) can steal
+    /// the id.
     Token,
     /// Both carriers, for migrating an existing cookie client to tokens or the
     /// reverse. Sockets with both present prefer the `Authorization` header.
@@ -136,6 +137,20 @@ impl SessionDelivery {
     #[must_use]
     pub fn sends_token(self) -> bool {
         matches!(self, Self::Token | Self::Both)
+    }
+
+    /// Whether that carrier may also authenticate a request.
+    ///
+    /// [`SessionDelivery::Token`] is a token-only deployment: it issues no
+    /// cookie and accepts none, so there is no ambient credential for a
+    /// cross-site request to carry. [`SessionDelivery::Both`] keeps cookies
+    /// working during a migration, which is the only reason it exists.
+    ///
+    /// `Bearer` is accepted in every mode: it is an explicit credential a
+    /// caller chooses to send, never one the browser attaches on its own.
+    #[must_use]
+    pub fn accepts_cookie(self) -> bool {
+        !matches!(self, Self::Token)
     }
 }
 
@@ -282,5 +297,12 @@ mod tests {
 
         assert!(SessionDelivery::Both.sends_cookie());
         assert!(SessionDelivery::Both.sends_token());
+    }
+
+    #[test]
+    fn token_mode_does_not_accept_cookie_authentication() {
+        assert!(SessionDelivery::Cookie.accepts_cookie());
+        assert!(SessionDelivery::Both.accepts_cookie());
+        assert!(!SessionDelivery::Token.accepts_cookie());
     }
 }

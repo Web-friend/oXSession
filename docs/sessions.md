@@ -46,6 +46,55 @@ Defaults: 7 days idle, 30 days absolute. Both are configurable per deployment;
 | `Secure` | configured | Off only for `http://localhost`; everything else must set it |
 | Name | `session`, configurable | Use `__Host-session` with `Secure` on for the strongest binding |
 
+## Delivery
+
+`POST /sessions` mints the id; `AUTH_SESSION_DELIVERY` decides how the client
+learns it.
+
+| Mode | Body | `Set-Cookie` | Cookie accepted | Bearer accepted |
+| --- | --- | --- | --- | --- |
+| `cookie` | `subject`, `expires_at` | yes, signed when `AUTH_COOKIE_KEYS` is set | yes | yes |
+| `token` | `subject`, `expires_at`, `session_id` | none | **no** (not parsed) | yes |
+| `both` | both | yes | yes | yes |
+
+Details that matter:
+
+* **The body always carries the raw id, never the `os1.…` wire value.** A bearer
+  token is the credential itself; a signed cookie is one carrier for it. Sending
+  the wire value would make bearer clients fail the id shape check.
+* **`Cache-Control: no-store` + `Pragma: no-cache` on every response that may
+  contain an id, on `/me` (success and error), and on `/logout`.** A
+  cookie-authenticated response carries no `Vary: Cookie`, so a shared cache
+  that stored it would serve one user's subject to another; `Pragma` covers
+  HTTP/1.0 intermediaries that ignore `Cache-Control`.
+* **`token` is token-only on both sides.** Issuing no cookie while still
+  accepting one would leave the ambient credential in place, so a cookie
+  presented in that mode is rejected. The cookie is not parsed at all: a
+  duplicate would otherwise answer `400 ambiguous` and a signed value would cost
+  an HMAC before the `401`. `both` exists to keep cookies working during a
+  migration.
+* **Bearer is accepted in every mode.** It is explicit — a caller chooses to
+  send it — so it adds no ambient attack surface.
+* **Logout revokes any credential it can identify**, including a cookie that
+  token mode refuses to authenticate for `/me`. Otherwise switching modes would
+  leave live ids that no client can kill. Logout still always sends the deletion
+  cookie, clearing a stale one from an earlier configuration; the client must
+  also drop its own `localStorage` entry, which the server cannot reach.
+
+### `localStorage` vs cookie
+
+| | `HttpOnly` cookie | `localStorage` + bearer |
+| --- | --- | --- |
+| Readable by scripts | no | yes — XSS becomes session theft |
+| Sent automatically | yes, to every same-site request | no |
+| CSRF exposure | needs `SameSite`/token defenses | none (no ambient credential) |
+| Non-browser clients | awkward | natural |
+| Server-side revocation | immediate | immediate |
+
+Neither is strictly better; the cookie default is safer for browsers, and the
+token mode exists because a browser app cannot read an `HttpOnly` cookie at all.
+`examples/localstorage.js` is a complete client.
+
 ## Store conformance
 
 Any adapter must satisfy these before it is useful:

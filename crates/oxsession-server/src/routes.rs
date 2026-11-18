@@ -1,7 +1,10 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode, header::CACHE_CONTROL},
+    http::{
+        HeaderMap, HeaderValue, StatusCode,
+        header::{CACHE_CONTROL, PRAGMA},
+    },
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -41,19 +44,25 @@ struct MeResponse {
 }
 
 /// Resolve the caller's session and report its subject.
+///
+/// The response is per-user and authenticated by an ambient cookie, so it must
+/// never be stored by a shared cache.
 async fn me(
     State(state): State<AppState>,
     headers: HeaderMap,
     cookies: CookieHeader,
-) -> Result<Json<MeResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let (id, source) = session_id(&state.config, &headers, &cookies)?;
     let session = state.sessions.validate(&id, now()).await?;
 
-    Ok(Json(MeResponse {
+    let mut response = Json(MeResponse {
         subject: session.subject().to_owned(),
         expires_at: session.expires_at(),
-        source,
-    }))
+        source: source.as_str(),
+    })
+    .into_response();
+    no_store(&mut response);
+    Ok(response)
 }
 
 #[derive(Deserialize)]
@@ -65,12 +74,22 @@ struct CreateSessionRequest {
 struct SessionCreated {
     subject: String,
     expires_at: u64,
+    /// Present only when `AUTH_SESSION_DELIVERY` includes `token`.
+    ///
+    /// This is the raw session id, not the signed cookie value: a client keeps
+    /// it and presents it as `Authorization: Bearer`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
 }
 
 /// Mint a session for `subject`.
 ///
 /// There is no provider yet, so this endpoint is gated behind `AUTH_DEV_LOGIN`
 /// and is absent (404) otherwise.
+///
+/// The credential is delivered according to
+/// [`SessionDelivery`](crate::config::SessionDelivery): as a cookie, in the
+/// response body for clients that store it themselves, or both.
 async fn create_session(
     State(state): State<AppState>,
     Json(body): Json<CreateSessionRequest>,
@@ -80,24 +99,34 @@ async fn create_session(
     }
 
     let session = state.sessions.create(&body.subject, now()).await?;
-    let wire = signed_or_raw(&state.config, session.id().as_str())?;
-    let cookie = session_cookie(&state.config, &wire)?;
+    let delivery = state.config.session_delivery;
 
-    let mut response = (
-        StatusCode::CREATED,
-        Json(SessionCreated {
-            subject: session.subject().to_owned(),
-            expires_at: session.expires_at(),
-        }),
-    )
-        .into_response();
+    let payload = SessionCreated {
+        subject: session.subject().to_owned(),
+        expires_at: session.expires_at(),
+        session_id: delivery
+            .sends_token()
+            .then(|| session.id().as_str().to_owned()),
+    };
 
-    let (name, value) = set_cookie(&cookie);
-    response.headers_mut().append(name, value);
+    let mut response = (StatusCode::CREATED, Json(payload)).into_response();
+    // A body that may carry a credential must not be stored by any cache.
+    no_store(&mut response);
+
+    if delivery.sends_cookie() {
+        let wire = signed_or_raw(&state.config, session.id().as_str())?;
+        let cookie = session_cookie(&state.config, &wire)?;
+        append_set_cookie(response.headers_mut(), &cookie);
+    }
+
     Ok(response)
 }
 
 /// Revoke the caller's session and clear the cookie.
+///
+/// Revocation uses whatever credential is presented, even one this deployment
+/// does not accept for authentication: logging out must work for any client that
+/// still holds a session, or the id would stay valid until it expires.
 ///
 /// Best effort: an unreadable cookie still gets cleared, because a client that
 /// cannot be identified should not keep presenting one.
@@ -106,7 +135,7 @@ async fn logout(
     headers: HeaderMap,
     cookies: CookieHeader,
 ) -> Response {
-    if let Ok((id, _)) = session_id(&state.config, &headers, &cookies) {
+    if let Ok((id, _)) = credential(&state.config, &headers, &cookies) {
         if let Err(error) = state.sessions.revoke(&id).await {
             eprintln!("failed to revoke session: {error}");
         }
@@ -120,34 +149,102 @@ async fn logout(
         }
         Err(error) => eprintln!("failed to build cookie deletion: {error}"),
     }
+    no_store(&mut response);
     response
 }
 
-/// Extract and shape-check the session id.
+/// Which carrier authenticated the request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Source {
+    Bearer,
+    Cookie,
+}
+
+impl Source {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Bearer => "bearer",
+            Self::Cookie => "cookie",
+        }
+    }
+}
+
+/// Extract and shape-check the session id, enforcing the delivery policy.
 fn session_id(
     config: &Config,
     headers: &HeaderMap,
     cookies: &CookieHeader,
-) -> Result<(SessionId, &'static str), ApiError> {
+) -> Result<(SessionId, Source), ApiError> {
     let name = config.session_cookie.as_str();
 
-    let (token, source) = if oxsession_axum::bearer(headers).is_some() {
+    if bearer(headers).is_some() {
         let credentials = cookies.credentials(headers, name)?;
-        (credentials.token(), "bearer")
-    } else if let Some(signer) = config.signer.as_deref() {
-        let payload = signed_cookie(cookies, signer, name)?
-            .ok_or_else(|| ApiError::Auth(AuthError::from(Error::Unauthenticated)))?;
-        (payload, "cookie")
-    } else {
-        let credentials = cookies.credentials(headers, name)?;
-        (credentials.token(), "cookie")
-    };
+        return parse_id(credentials.token(), Source::Bearer);
+    }
 
-    let id = SessionId::new(token).map_err(|_| {
-        // A malformed id is a bad credential, not a server fault.
-        ApiError::Auth(AuthError::from(Error::Unauthenticated))
-    })?;
+    // Checked before the cookie is parsed. In a token-only deployment the
+    // cookie carrier is not a credential, so its contents must not decide the
+    // status code — a duplicate cookie would otherwise answer `400 ambiguous`
+    // instead of `401` — and it must not cost a signature check.
+    if !config.session_delivery.accepts_cookie() {
+        return Err(unauthenticated());
+    }
+
+    parse_id(cookie_token(config, headers, cookies)?, Source::Cookie)
+}
+
+/// The credential a request presents, before the delivery policy is applied.
+///
+/// Used by logout, which must be able to identify a session through a carrier
+/// this deployment does not accept for authentication.
+fn credential(
+    config: &Config,
+    headers: &HeaderMap,
+    cookies: &CookieHeader,
+) -> Result<(SessionId, Source), ApiError> {
+    let name = config.session_cookie.as_str();
+
+    if bearer(headers).is_some() {
+        let credentials = cookies.credentials(headers, name)?;
+        return parse_id(credentials.token(), Source::Bearer);
+    }
+
+    parse_id(cookie_token(config, headers, cookies)?, Source::Cookie)
+}
+
+/// Read the cookie carrier, verifying the signature when signing is enabled.
+fn cookie_token<'a>(
+    config: &Config,
+    headers: &'a HeaderMap,
+    cookies: &'a CookieHeader,
+) -> Result<&'a str, ApiError> {
+    let name = config.session_cookie.as_str();
+
+    match config.signer.as_deref() {
+        Some(signer) => signed_cookie(cookies, signer, name)?.ok_or_else(unauthenticated),
+        None => Ok(cookies.credentials(headers, name)?.token()),
+    }
+}
+
+fn parse_id(token: &str, source: Source) -> Result<(SessionId, Source), ApiError> {
+    // A malformed id is a bad credential, not a server fault.
+    let id = SessionId::new(token).map_err(|_| unauthenticated())?;
     Ok((id, source))
+}
+
+fn unauthenticated() -> ApiError {
+    ApiError::Auth(AuthError::from(Error::Unauthenticated))
+}
+
+/// Mark a response as uncacheable.
+///
+/// `no-store` rather than `private`: a shared cache that ignores `Vary: Cookie`
+/// must not be able to hand one user's subject to another. `Pragma` is repeated
+/// for HTTP/1.0 intermediaries that never learned `Cache-Control`.
+fn no_store(response: &mut Response) {
+    let headers = response.headers_mut();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(PRAGMA, HeaderValue::from_static("no-cache"));
 }
 
 fn signed_or_raw(config: &Config, id: &str) -> Result<String, ApiError> {
@@ -193,7 +290,7 @@ fn clear_cookie(config: &Config) -> Result<SetCookie<'_>, ApiError> {
         .map_err(|error| ApiError::Internal(format!("invalid session cookie: {error}")))
 }
 
-/// Everything a handler can fail with, rendered as an HTTP response.
+/// A credential failure, rendered as an HTTP response.
 #[derive(Debug)]
 pub enum ApiError {
     /// The credential was missing, ambiguous, or failed verification.
@@ -242,7 +339,7 @@ impl std::error::Error for ApiError {}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        match self {
+        let mut response = match self {
             Self::Auth(error) => error.into_response(),
             Self::Session(SessionError::NotFound | SessionError::Expired) => {
                 (StatusCode::UNAUTHORIZED, "authentication required").into_response()
@@ -266,7 +363,11 @@ impl IntoResponse for ApiError {
                 eprintln!("internal failure: {message}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
             }
-        }
+        };
+
+        // An error page for an authenticated endpoint is still per-request.
+        no_store(&mut response);
+        response
     }
 }
 
@@ -285,6 +386,7 @@ mod tests {
             policy: Policy::default(),
             session_cookie_secure: false,
             dev_login: true,
+            session_delivery: crate::config::SessionDelivery::Cookie,
             signer: None,
         }
     }

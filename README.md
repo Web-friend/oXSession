@@ -16,7 +16,7 @@ mints and validates real sessions. OIDC providers and JWT issuance come next.
 | [`oxsession-sign`](crates/oxsession-sign) | HMAC-SHA256 signatures, key ids, rotation | Axum, storage, environment variables |
 | [`oxsession-session`](crates/oxsession-session) | Session lifecycle policy, the in-memory store | Axum, HTTP, environment variables |
 | [`oxsession-axum`](crates/oxsession-axum) | Request parts, HTTP status mapping | Parsing, signing, and storage rules |
-| [`oxsession-server`](crates/oxsession-server) | Environment configuration, routes, serving | Anything below the adapter |
+| [`oxsession-server`](crates/oxsession-server) | Environment configuration, routes, session delivery, serving | Anything below the adapter |
 
 The rule that keeps this honest: **core never sees a `HeaderMap`, a `Router`, a
 `Pool`, or `env::var`.** Every framework, database, and provider is an adapter,
@@ -87,6 +87,60 @@ deployment needs a durable adapter with the same contract.
 `SessionId` is a credential, so its `Debug` output is redacted — leaking a
 session id into a log line is a login.
 
+### Delivering the credential
+
+The session id is a bearer credential either way; delivery only decides which
+carrier the client should look at.
+
+| `AUTH_SESSION_DELIVERY` | `POST /sessions` returns | Cookie accepted on read? | Use when |
+| --- | --- | --- | --- |
+| `cookie` (default) | `Set-Cookie` only | yes | Server-rendered apps, or any client that can hold a cookie. Scripts cannot read the id |
+| `token` | `{"session_id":"…"}` in the body, `Cache-Control: no-store`, no cookie | no | Browser apps keeping the id in `localStorage`, mobile apps, CLIs |
+| `both` | both carriers | yes | Migrating one client type at a time |
+
+`token` is a token-only deployment: it issues no cookie **and accepts none**, so
+no ambient credential can ride along on a cross-site request. A cookie presented
+in that mode is a `401`, not a downgrade, and the cookie is never even parsed —
+a duplicate or malformed one cannot change the status code or cost a signature
+check. Bearer is accepted in every mode, because it is a credential the caller
+chooses to send rather than one a browser attaches on its own.
+
+Logout is the exception: it revokes whatever credential is presented, including a
+cookie that token mode would refuse to authenticate, so an id can always be
+killed instead of lingering until it expires. The client must still drop its own
+`localStorage` entry; the server cannot reach it.
+
+Responses that may carry a credential or describe a session — `/me` success and
+error alike, `/logout`, and the mint response — are sent with
+`Cache-Control: no-store` and `Pragma: no-cache`. A cookie-authenticated response
+has no `Vary: Cookie`, so a shared cache storing it would hand one user's subject
+to another, and HTTP/1.0 intermediaries ignore `Cache-Control`.
+
+Putting the id in `localStorage` means JavaScript can read it, so an XSS bug is
+a session theft — the exact thing an `HttpOnly` cookie prevents. The trade is
+that nothing is sent automatically, so cross-site requests carry no ambient
+credential. See [`examples/localstorage.js`](examples/localstorage.js) for a
+working client:
+
+```js
+const session = await (await fetch("/sessions", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ subject: "user-1" }),
+})).json();
+
+localStorage.setItem("oxsession.session", session.session_id);
+
+await fetch("/me", {
+  headers: { authorization: `Bearer ${localStorage.getItem("oxsession.session")}` },
+});
+```
+
+The bearer channel is also why signed cookies protect less than they appear to:
+a client holding the raw id bypasses the signature check entirely, because the
+id is the credential. Signing defends the cookie carrier against forgery and
+name replay, not the token.
+
 ## Signed cookies (opt-in)
 
 Signing is a policy decision, not a transport rule: preferences stay unsigned,
@@ -133,7 +187,9 @@ format, a test vector, and a 6-line Python reference implementation live in
 AUTH_DEV_LOGIN=1 cargo run -p oxsession-server
 ```
 
-The server listens on `127.0.0.1:3000` by default.
+The server listens on `127.0.0.1:3000` by default. To serve browser clients that
+use `localStorage`, add `AUTH_SESSION_DELIVERY=token` and read `session_id` from
+the `POST /sessions` body.
 
 ```sh
 curl http://127.0.0.1:3000/health
@@ -153,7 +209,7 @@ curl -H 'Authorization: Bearer <session-id>' http://127.0.0.1:3000/me
 | --- | --- |
 | `GET /health` | `200 {"status":"ok"}` |
 | `GET /me` | `200 {"subject":"...","expires_at":...,"source":"cookie"\|"bearer"}`, `401` for a missing, unknown, expired, or forged session |
-| `POST /sessions` | `201` + `Set-Cookie`; `404` unless `AUTH_DEV_LOGIN=1`; `400` for an empty subject |
+| `POST /sessions` | `201` + `Set-Cookie` (cookie delivery) or `201 {"session_id":"…"}` (token delivery); `404` unless `AUTH_DEV_LOGIN=1`; `400` for an empty subject |
 | `POST /logout` | `204` + cookie deletion; revokes the session when it can be identified |
 
 `/sessions` exists because there is no identity provider yet. It trusts any
@@ -173,6 +229,7 @@ reads the environment:
 | `AUTH_SESSION_ABSOLUTE_TTL_SECONDS` | `2592000` | Lifetime cap from creation |
 | `AUTH_SESSION_COOKIE_SECURE` | off | Send the cookie with `Secure`. Required outside `localhost` |
 | `AUTH_DEV_LOGIN` | off | Enables `POST /sessions` |
+| `AUTH_SESSION_DELIVERY` | `cookie` | `cookie`, `token`, or `both`; see [Delivering the credential](#delivering-the-credential) |
 | `AUTH_COOKIE_KEYS` | unset | `keyid:base64url,keyid:base64url,...`; first entry signs, the rest verify. Unset means the session id travels unsigned |
 
 Generate a signing key:
@@ -189,10 +246,11 @@ No dotenv files are loaded.
 cargo test --workspace
 ```
 
-106 tests cover the parser's edge cases (quoted values, malformed pairs,
+124 tests cover the parser's edge cases (quoted values, malformed pairs,
 duplicate names, size and pair limits), prefix rules, credential precedence,
 the published signing vector and tampering matrix, session expiry and sliding,
-store eviction, and the endpoints end-to-end through a real router.
+store eviction, every delivery mode, and the endpoints end-to-end through a real
+router.
 
 ## Roadmap
 
