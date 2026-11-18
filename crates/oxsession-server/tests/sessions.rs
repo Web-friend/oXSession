@@ -3,18 +3,21 @@
 //! These go through the real router, the real manager, and the real in-memory
 //! store, so a request is the only thing that is simulated.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, RwLock};
 
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode, header},
 };
+use oxsession_core::{Session, SessionId, SessionStore};
 use oxsession_server::{
     config::{Config, SessionDelivery},
     routes,
+    state::AppState,
 };
-use oxsession_session::Policy;
+use oxsession_session::{Policy, SessionManager};
 use oxsession_sign::{CookieSigner, KeyId, SecretKey};
 use tower::ServiceExt;
 
@@ -140,6 +143,31 @@ async fn reply(response: axum::response::Response) -> Reply {
 
 fn cookie_pair(set_cookie: &str) -> &str {
     set_cookie.split(';').next().unwrap().trim()
+}
+
+/// Pull `"<field>":<number>` out of the tiny JSON bodies these tests assert on.
+fn field_u64(body: &str, name: &str) -> Option<u64> {
+    let key = format!("\"{name}\":");
+    let start = body.find(&key)? + key.len();
+    let rest = &body[start..];
+    let end = rest.find(|c: char| !c.is_ascii_digit())?;
+    rest[..end].parse().ok()
+}
+
+fn short_config() -> Config {
+    let mut config = config();
+    config.policy = Policy::new(2, 100).unwrap();
+    config
+}
+
+fn short_app() -> Router {
+    routes::router(short_config())
+}
+
+fn short_app_with(delivery: SessionDelivery) -> Router {
+    let mut config = short_config();
+    config.session_delivery = delivery;
+    routes::router(config)
 }
 
 /// Pull `"<field>":"<value>"` out of the tiny JSON bodies these tests assert on.
@@ -651,9 +679,191 @@ async fn cookie_mode_still_reports_ambiguous_cookies() {
     assert_eq!(reply.status, StatusCode::BAD_REQUEST);
 }
 
+/// A store whose `delete` can be made to fail, to exercise the logout
+/// error-surfacing path without breaking a real adapter.
+struct RevokeFailsStore {
+    sessions: RwLock<HashMap<SessionId, Session>>,
+    fail_delete: AtomicBool,
+}
+
+impl RevokeFailsStore {
+    fn new() -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+            fail_delete: AtomicBool::new(false),
+        }
+    }
+}
+
+impl SessionStore for RevokeFailsStore {
+    type Error = std::io::Error;
+
+    async fn insert(&self, session: Session) -> Result<(), Self::Error> {
+        self.sessions
+            .write()
+            .unwrap()
+            .insert(session.id().clone(), session);
+        Ok(())
+    }
+
+    async fn get(&self, id: &SessionId) -> Result<Option<Session>, Self::Error> {
+        Ok(self.sessions.read().unwrap().get(id).cloned())
+    }
+
+    async fn touch(
+        &self,
+        _id: &SessionId,
+        _expires_at: u64,
+    ) -> Result<bool, Self::Error> {
+        Ok(true)
+    }
+
+    async fn delete(&self, id: &SessionId) -> Result<bool, Self::Error> {
+        if self.fail_delete.load(Ordering::Relaxed) {
+            return Err(std::io::Error::other("revocation failed"));
+        }
+        Ok(self.sessions.write().unwrap().remove(id).is_some())
+    }
+
+    async fn delete_expired(&self, _now: u64) -> Result<usize, Self::Error> {
+        Ok(0)
+    }
+}
+
+#[tokio::test]
+async fn logout_surfaces_revocation_failures() {
+    let mut store = RevokeFailsStore::new();
+    store.fail_delete.store(true, Ordering::Relaxed);
+    let state = AppState {
+        config: short_config(),
+        sessions: Arc::new(SessionManager::new(store, Policy::new(2, 100).unwrap())),
+    };
+    let app = routes::router_with_state(state);
+
+    let created = call(
+        app.clone(),
+        "POST",
+        "/sessions",
+        Some(r#"{"subject":"user-1"}"#),
+        None,
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let cookie = cookie_pair(created.set_cookie.as_deref().unwrap()).to_owned();
+
+    // Revocation fails server-side: logout must report an error and must not
+    // clear the cookie, so the client keeps its session and can retry.
+    let logged_out = call(app.clone(), "POST", "/logout", None, Some(&cookie)).await;
+    assert_eq!(logged_out.status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(logged_out.set_cookie.is_none());
+
+    // The session is still valid server-side.
+    let me = call(app, "GET", "/me", None, Some(&cookie)).await;
+    assert_eq!(me.status, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn health_stays_public() {
     let reply = call(unsigned_app(), "GET", "/health", None, None).await;
     assert_eq!(reply.status, StatusCode::OK);
     assert!(reply.body.contains(r#""status":"ok""#));
+}
+
+#[tokio::test]
+async fn me_reissues_cookie_when_expiry_slides() {
+    let app = short_app();
+    let created = call(
+        app.clone(),
+        "POST",
+        "/sessions",
+        Some(r#"{"subject":"user-1"}"#),
+        None,
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED);
+    let create_expires = field_u64(&created.body, "expires_at").unwrap();
+    let cookie = cookie_pair(created.set_cookie.as_deref().unwrap()).to_owned();
+
+    // Let the idle deadline get close so a `/me` use slides the expiry.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let me = call(app, "GET", "/me", None, Some(&cookie)).await;
+    assert_eq!(me.status, StatusCode::OK);
+    let me_expires = field_u64(&me.body, "expires_at").unwrap();
+    assert!(
+        me_expires > create_expires,
+        "sliding expiry must move the stored deadline forward"
+    );
+
+    // The cookie must be re-issued so the browser's Max-Age tracks the slide.
+    let set_cookie = me.set_cookie.as_deref().unwrap();
+    assert!(set_cookie.starts_with("session="));
+    assert!(
+        set_cookie.contains("Max-Age=2"),
+        "re-issued cookie must refresh Max-Age: {set_cookie}"
+    );
+}
+
+#[tokio::test]
+async fn me_keeps_reissuing_cookie_on_every_use() {
+    let app = short_app();
+    let created = call(
+        app.clone(),
+        "POST",
+        "/sessions",
+        Some(r#"{"subject":"user-1"}"#),
+        None,
+    )
+    .await;
+    let cookie = cookie_pair(created.set_cookie.as_deref().unwrap()).to_owned();
+
+    let first = call(app.clone(), "GET", "/me", None, Some(&cookie)).await;
+    assert_eq!(first.status, StatusCode::OK);
+    assert!(first.set_cookie.is_some());
+
+    let second = call(app, "GET", "/me", None, Some(&cookie)).await;
+    assert_eq!(second.status, StatusCode::OK);
+    assert!(second.set_cookie.is_some());
+}
+
+#[tokio::test]
+async fn me_does_not_reissue_cookie_in_token_mode() {
+    let app = short_app_with(SessionDelivery::Token);
+    let created = call(
+        app.clone(),
+        "POST",
+        "/sessions",
+        Some(r#"{"subject":"user-1"}"#),
+        None,
+    )
+    .await;
+    let id = field(&created.body, "session_id").unwrap().to_owned();
+
+    let me = call_bearer(app, "GET", "/me", &id).await;
+    assert_eq!(me.status, StatusCode::OK);
+    assert!(
+        me.set_cookie.is_none(),
+        "token mode must not set a cookie on /me"
+    );
+}
+
+#[tokio::test]
+async fn me_does_not_reissue_cookie_for_bearer_source() {
+    let app = short_app_with(SessionDelivery::Both);
+    let created = call(
+        app.clone(),
+        "POST",
+        "/sessions",
+        Some(r#"{"subject":"user-1"}"#),
+        None,
+    )
+    .await;
+    let id = field(&created.body, "session_id").unwrap().to_owned();
+
+    let me = call_bearer(app, "GET", "/me", &id).await;
+    assert_eq!(me.status, StatusCode::OK);
+    assert!(
+        me.set_cookie.is_none(),
+        "a bearer-authenticated /me must not re-issue a cookie"
+    );
 }

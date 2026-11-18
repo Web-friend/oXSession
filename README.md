@@ -261,3 +261,6 @@ router.
 4. JWT issuance with a JWKS endpoint and key rotation.
 5. Sealed (encrypted) cookies — signed cookies already ship in `oxsession-sign`.
 6. Additional adapters (Actix, Hyper, serverless).
+
+Current status, known gaps, and inconsistencies are tracked in
+[`logs.md`](logs.md).

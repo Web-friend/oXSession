@@ -200,13 +200,16 @@ impl<S: SessionStore> SessionManager<S> {
     /// Use after a privilege change (password change, MFA enrolment): the old
     /// id stops working immediately.
     ///
+    /// The old id is deleted *before* the replacement is created, so a failure
+    /// at any step never leaves two live sessions under different ids.
+    ///
     /// # Errors
     ///
     /// Any error from [`SessionManager::validate`] or [`SessionManager::create`].
     pub async fn rotate(&self, id: &SessionId, now: u64) -> Result<Session, Error> {
         let existing = self.validate(id, now).await?;
-        let replacement = self.create(existing.subject(), now).await?;
         self.store.delete(id).await.map_err(Error::store)?;
+        let replacement = self.create(existing.subject(), now).await?;
         Ok(replacement)
     }
 
@@ -228,11 +231,81 @@ fn generate_id() -> Result<SessionId, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::{atomic::AtomicBool, atomic::Ordering, RwLock};
+
+    use oxsession_core::SessionStore;
+
     use super::*;
     use crate::memory::MemoryStore;
 
     fn manager(policy: Policy) -> SessionManager<MemoryStore> {
         SessionManager::new(MemoryStore::new(), policy)
+    }
+
+    /// A store that can be told to fail `delete`, to exercise error paths in
+    /// the manager without breaking a real adapter.
+    struct FailDeleteStore {
+        sessions: RwLock<HashMap<SessionId, Session>>,
+        fail_delete: AtomicBool,
+    }
+
+    impl FailDeleteStore {
+        fn new() -> Self {
+            Self {
+                sessions: RwLock::new(HashMap::new()),
+                fail_delete: AtomicBool::new(false),
+            }
+        }
+
+        fn len(&self) -> usize {
+            self.sessions.read().unwrap().len()
+        }
+    }
+
+    impl SessionStore for FailDeleteStore {
+        type Error = std::io::Error;
+
+        async fn insert(&self, session: Session) -> Result<(), Self::Error> {
+            self.sessions
+                .write()
+                .unwrap()
+                .insert(session.id().clone(), session);
+            Ok(())
+        }
+
+        async fn get(&self, id: &SessionId) -> Result<Option<Session>, Self::Error> {
+            Ok(self.sessions.read().unwrap().get(id).cloned())
+        }
+
+        async fn touch(
+            &self,
+            id: &SessionId,
+            expires_at: u64,
+        ) -> Result<bool, Self::Error> {
+            let mut sessions = self.sessions.write().unwrap();
+            match sessions.get_mut(id) {
+                Some(session) => {
+                    *session = session.clone().with_expires_at(expires_at);
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        async fn delete(&self, id: &SessionId) -> Result<bool, Self::Error> {
+            if self.fail_delete.load(Ordering::Relaxed) {
+                return Err(std::io::Error::other("delete failed"));
+            }
+            Ok(self.sessions.write().unwrap().remove(id).is_some())
+        }
+
+        async fn delete_expired(&self, now: u64) -> Result<usize, Self::Error> {
+            let mut sessions = self.sessions.write().unwrap();
+            let before = sessions.len();
+            sessions.retain(|_, session| !session.is_expired(now));
+            Ok(before - sessions.len())
+        }
     }
 
     fn short_policy() -> Policy {
@@ -379,5 +452,36 @@ mod tests {
         assert_eq!(Policy::new(0, 10).unwrap_err(), InvalidPolicy);
         assert_eq!(Policy::new(10, 5).unwrap_err(), InvalidPolicy);
         assert_eq!(Policy::default().ttl(), DEFAULT_TTL_SECONDS);
+    }
+
+    #[tokio::test]
+    async fn rotate_deletes_old_id_before_creating_replacement() {
+        let store = FailDeleteStore::new();
+        let manager = SessionManager::new(store, short_policy());
+        let session = manager.create("user-1", 1_000).await.unwrap();
+
+        let replacement = manager.rotate(session.id(), 1_010).await.unwrap();
+        assert_ne!(replacement.id(), session.id());
+        assert_eq!(replacement.subject(), "user-1");
+
+        // The old id is gone; only the replacement survives.
+        assert!(manager.store().get(session.id()).await.unwrap().is_none());
+        assert!(manager.validate(replacement.id(), 1_011).await.is_ok());
+        assert_eq!(manager.store().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rotate_failure_leaves_no_two_live_sessions() {
+        let store = FailDeleteStore::new();
+        store.fail_delete.store(true, Ordering::Relaxed);
+        let manager = SessionManager::new(store, short_policy());
+        let session = manager.create("user-1", 1_000).await.unwrap();
+
+        let error = manager.rotate(session.id(), 1_010).await.unwrap_err();
+        assert!(matches!(error, Error::Store(_)));
+
+        // No replacement was created and the old id is still the only session.
+        assert!(manager.store().get(session.id()).await.unwrap().is_some());
+        assert_eq!(manager.store().len(), 1);
     }
 }

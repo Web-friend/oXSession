@@ -11,20 +11,26 @@ use axum::{
 use oxsession_axum::{
     AuthError, CookieHeader, append_set_cookie, bearer, set_cookie, signed_cookie,
 };
-use oxsession_core::{Error, SameSite, SessionId, SetCookie};
-use oxsession_session::{Error as SessionError, now};
+use oxsession_core::{Error, SameSite, SessionId, SessionStore, SetCookie};
+use oxsession_session::{Error as SessionError, MemoryStore, now};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
-use crate::state::AppState;
+use crate::state::{AppState, MemoryAppState};
 
-pub fn router(config: Config) -> Router {
+pub fn router(config: Config) -> Router<MemoryAppState> {
+    router_with_state(MemoryAppState::new(config, MemoryStore::new()))
+}
+
+/// Build the router from an already-assembled [`AppState`], so tests can inject
+/// a custom store (for example one whose revocation fails).
+pub fn router_with_state<S: SessionStore>(state: AppState<S>) -> Router<AppState<S>> {
     Router::new()
         .route("/health", get(health))
         .route("/me", get(me))
         .route("/sessions", post(create_session))
         .route("/logout", post(logout))
-        .with_state(AppState::new(config))
+        .with_state(state)
 }
 
 #[derive(Serialize)]
@@ -47,8 +53,8 @@ struct MeResponse {
 ///
 /// The response is per-user and authenticated by an ambient cookie, so it must
 /// never be stored by a shared cache.
-async fn me(
-    State(state): State<AppState>,
+async fn me<S: SessionStore>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     cookies: CookieHeader,
 ) -> Result<Response, ApiError> {
@@ -62,6 +68,18 @@ async fn me(
     })
     .into_response();
     no_store(&mut response);
+
+    // Sliding expiry moved the stored deadline, so re-issue the cookie so the
+    // browser's Max-Age tracks it instead of expiring on the mint-time
+    // schedule. Only cookie-authenticated requests carry a cookie to refresh.
+    if source == Source::Cookie && state.config.session_delivery.sends_cookie() {
+        let now = now();
+        let max_age = session.expires_at().saturating_sub(now);
+        let wire = signed_or_raw(&state.config, session.id().as_str())?;
+        let cookie = session_cookie(&state.config, &wire, max_age)?;
+        append_set_cookie(response.headers_mut(), &cookie);
+    }
+
     Ok(response)
 }
 
@@ -90,8 +108,8 @@ struct SessionCreated {
 /// The credential is delivered according to
 /// [`SessionDelivery`](crate::config::SessionDelivery): as a cookie, in the
 /// response body for clients that store it themselves, or both.
-async fn create_session(
-    State(state): State<AppState>,
+async fn create_session<S: SessionStore>(
+    State(state): State<AppState<S>>,
     Json(body): Json<CreateSessionRequest>,
 ) -> Result<Response, ApiError> {
     if !state.config.dev_login {
@@ -115,7 +133,7 @@ async fn create_session(
 
     if delivery.sends_cookie() {
         let wire = signed_or_raw(&state.config, session.id().as_str())?;
-        let cookie = session_cookie(&state.config, &wire)?;
+        let cookie = session_cookie(&state.config, &wire, state.config.policy.ttl())?;
         append_set_cookie(response.headers_mut(), &cookie);
     }
 
@@ -128,17 +146,16 @@ async fn create_session(
 /// does not accept for authentication: logging out must work for any client that
 /// still holds a session, or the id would stay valid until it expires.
 ///
-/// Best effort: an unreadable cookie still gets cleared, because a client that
-/// cannot be identified should not keep presenting one.
-async fn logout(
-    State(state): State<AppState>,
+/// Revocation failures are surfaced: the cookie is not cleared when the
+/// server-side session cannot be killed, so the client keeps its cookie and can
+/// retry instead of believing it logged out.
+async fn logout<S: SessionStore>(
+    State(state): State<AppState<S>>,
     headers: HeaderMap,
     cookies: CookieHeader,
-) -> Response {
+) -> Result<Response, ApiError> {
     if let Ok((id, _)) = credential(&state.config, &headers, &cookies) {
-        if let Err(error) = state.sessions.revoke(&id).await {
-            eprintln!("failed to revoke session: {error}");
-        }
+        state.sessions.revoke(&id).await.map_err(ApiError::from)?;
     }
 
     let mut response = StatusCode::NO_CONTENT.into_response();
@@ -150,7 +167,7 @@ async fn logout(
         Err(error) => eprintln!("failed to build cookie deletion: {error}"),
     }
     no_store(&mut response);
-    response
+    Ok(response)
 }
 
 /// Which carrier authenticated the request.
@@ -256,13 +273,17 @@ fn signed_or_raw(config: &Config, id: &str) -> Result<String, ApiError> {
     }
 }
 
-fn session_cookie<'a>(config: &'a Config, value: &'a str) -> Result<SetCookie<'a>, ApiError> {
+fn session_cookie<'a>(
+    config: &'a Config,
+    value: &'a str,
+    max_age: u64,
+) -> Result<SetCookie<'a>, ApiError> {
     let mut builder = SetCookie::builder(&config.session_cookie, value)
         .map_err(|error| ApiError::Internal(format!("invalid session cookie: {error}")))?
         .path("/")
         .http_only()
         .same_site(SameSite::Lax)
-        .max_age(config.policy.ttl());
+        .max_age(max_age);
 
     if config.session_cookie_secure {
         builder = builder.secure();
@@ -274,20 +295,7 @@ fn session_cookie<'a>(config: &'a Config, value: &'a str) -> Result<SetCookie<'a
 }
 
 fn clear_cookie(config: &Config) -> Result<SetCookie<'_>, ApiError> {
-    let mut builder = SetCookie::builder(&config.session_cookie, "")
-        .map_err(|error| ApiError::Internal(format!("invalid session cookie: {error}")))?
-        .path("/")
-        .http_only()
-        .same_site(SameSite::Lax)
-        .max_age(0);
-
-    if config.session_cookie_secure {
-        builder = builder.secure();
-    }
-
-    builder
-        .build()
-        .map_err(|error| ApiError::Internal(format!("invalid session cookie: {error}")))
+    session_cookie(config, "", 0)
 }
 
 /// A credential failure, rendered as an HTTP response.

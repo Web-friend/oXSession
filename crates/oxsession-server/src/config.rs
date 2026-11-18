@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use oxsession_session::Policy;
 use oxsession_sign::{CookieSigner, KeyId, SecretKey};
+use oxsession_core::Prefix;
 
 /// Configuration of the standalone server.
 ///
@@ -89,11 +90,27 @@ impl Config {
             Err(error) => return Err(error).context("AUTH_SESSION_DELIVERY is not valid Unicode"),
         };
 
+        let session_cookie_secure = flag("AUTH_SESSION_COOKIE_SECURE");
+        match Prefix::of(&session_cookie) {
+            Prefix::Host | Prefix::Secure if !session_cookie_secure => bail!(
+                "AUTH_SESSION_COOKIE_SECURE must be enabled when AUTH_SESSION_COOKIE uses the \
+                 __Host- or __Secure- prefix, got cookie {session_cookie:?}"
+            ),
+            _ => {}
+        }
+
+        // Cookies without `Secure` travel in clear text, so a deployment that
+        // listens outside loopback must require the flag. `127.0.0.1` and `::1`
+        // (and any other loopback address) are exempt for local development.
+        if !ip.is_loopback() && !session_cookie_secure {
+            bail!("AUTH_SESSION_COOKIE_SECURE must be enabled when binding to a non-loopback address {ip}; session cookies would otherwise be sent in clear text");
+        }
+
         Ok(Self {
             bind_address: SocketAddr::new(ip, port),
             session_cookie,
             policy,
-            session_cookie_secure: flag("AUTH_SESSION_COOKIE_SECURE"),
+            session_cookie_secure,
             dev_login: flag("AUTH_DEV_LOGIN"),
             session_delivery,
             signer,
@@ -234,6 +251,36 @@ mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
+    /// Temporarily overrides an env var and restores it on drop, so tests do
+    /// not leak state into each other or into the process environment.
+    struct EnvVar {
+        name: String,
+        previous: Option<String>,
+    }
+
+    impl EnvVar {
+        fn set(name: &str, value: &str) -> Self {
+            let previous = std::env::var(name).ok();
+            // Safety: single-threaded test setup; no other code reads these
+            // vars concurrently.
+            unsafe { std::env::set_var(name, value) };
+            Self {
+                name: name.to_owned(),
+                previous,
+            }
+        }
+    }
+
+    impl Drop for EnvVar {
+        fn drop(&mut self) {
+            // Safety: single-threaded test teardown.
+            match &self.previous {
+                Some(value) => unsafe { std::env::set_var(&self.name, value) },
+                None => unsafe { std::env::remove_var(&self.name) },
+            }
+        }
+    }
+
     fn encode(bytes: impl AsRef<[u8]>) -> String {
         URL_SAFE_NO_PAD.encode(bytes)
     }
@@ -304,5 +351,55 @@ mod tests {
         assert!(SessionDelivery::Cookie.accepts_cookie());
         assert!(SessionDelivery::Both.accepts_cookie());
         assert!(!SessionDelivery::Token.accepts_cookie());
+    }
+
+    #[test]
+    fn prefixed_cookie_requires_secure_at_startup() {
+        for cookie in ["__Host-session", "__Secure-session"] {
+            let _cookie = EnvVar::set("AUTH_SESSION_COOKIE", cookie);
+            // Without Secure the configuration must fail to load.
+            {
+                let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "0");
+                assert!(
+                    Config::from_env().is_err(),
+                    "{cookie} without Secure must be rejected at startup"
+                );
+            }
+            // With Secure it loads.
+            {
+                let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "1");
+                assert!(Config::from_env().is_ok(), "{cookie} with Secure must load");
+            }
+        }
+    }
+
+    #[test]
+    fn non_loopback_bind_requires_secure() {
+        let _bind = EnvVar::set("AUTH_BIND_ADDR", "0.0.0.0");
+        {
+            let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "0");
+            assert!(
+                Config::from_env().is_err(),
+                "non-loopback bind without Secure must be rejected at startup"
+            );
+        }
+        {
+            let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "1");
+            assert!(Config::from_env().is_ok());
+        }
+    }
+
+    #[test]
+    fn loopback_bind_without_secure_is_allowed() {
+        let _bind = EnvVar::set("AUTH_BIND_ADDR", "127.0.0.1");
+        let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "0");
+        assert!(Config::from_env().is_ok());
+    }
+
+    #[test]
+    fn ipv6_loopback_bind_without_secure_is_allowed() {
+        let _bind = EnvVar::set("AUTH_BIND_ADDR", "::1");
+        let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "0");
+        assert!(Config::from_env().is_ok());
     }
 }
