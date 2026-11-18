@@ -15,4 +15,5 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
 oxsession-core = { path = "crates/oxsession-core" }
 oxsession-axum = { path = "crates/oxsession-axum" }
+oxsession-session = { path = "crates/oxsession-session" }
 oxsession-sign = { path = "crates/oxsession-sign" }

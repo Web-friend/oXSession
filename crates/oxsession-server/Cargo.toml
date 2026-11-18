@@ -15,9 +15,11 @@ anyhow.workspace = true
 axum.workspace = true
 oxsession-axum.workspace = true
 oxsession-core.workspace = true
+oxsession-session.workspace = true
 oxsession-sign.workspace = true
 serde.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 base64 = "0.22"
+tower = { version = "0.5", features = ["util"] }

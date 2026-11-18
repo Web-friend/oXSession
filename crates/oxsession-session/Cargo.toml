@@ -1,0 +1,15 @@
+[package]
+name = "oxsession-session"
+description = "Session manager and in-memory store for oXSession"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+base64 = "0.22"
+getrandom = "0.2"
+oxsession-core.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

@@ -18,6 +18,7 @@
 mod cookies;
 mod credentials;
 mod error;
+mod session;
 mod set_cookie;
 
 pub use cookies::{
@@ -26,4 +27,8 @@ pub use cookies::{
 };
 pub use credentials::{Credentials, resolve};
 pub use error::{Error, Result};
+pub use session::{
+    InvalidSessionId, MAX_SESSION_ID_BYTES, MIN_SESSION_ID_BYTES, Session, SessionId, SessionStore,
+    is_valid_session_id,
+};
 pub use set_cookie::{Prefix, SameSite, SetCookie, SetCookieBuilder};
