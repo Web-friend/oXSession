@@ -1,5 +1,4 @@
 mod config;
-mod error;
 mod routes;
 
 use anyhow::Context;
@@ -8,12 +7,13 @@ use tokio::net::TcpListener;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = config::Config::from_env().context("failed to load service configuration")?;
-    let listener = TcpListener::bind(config.bind_address)
+    let bind_address = config.bind_address;
+    let listener = TcpListener::bind(bind_address)
         .await
-        .with_context(|| format!("failed to bind to {}", config.bind_address))?;
+        .with_context(|| format!("failed to bind to {bind_address}"))?;
 
-    println!("auth service listening on {}", config.bind_address);
-    axum::serve(listener, routes::router())
+    println!("oXSession server listening on {bind_address}");
+    axum::serve(listener, routes::router(config))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("HTTP server failed")?;

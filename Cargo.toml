@@ -1,10 +1,17 @@
-[package]
-name = "oxsession-auth"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+rust-version = "1.85"
 
-[dependencies]
+[workspace.dependencies]
 anyhow = "1"
 axum = "0.8"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal"] }
+oxsession-core = { path = "crates/oxsession-core" }
+oxsession-axum = { path = "crates/oxsession-axum" }

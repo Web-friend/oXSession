@@ -1,0 +1,19 @@
+[package]
+name = "oxsession-server"
+description = "Optional standalone HTTP server for oXSession"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "oxsession-auth"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+oxsession-axum.workspace = true
+oxsession-core.workspace = true
+serde.workspace = true
+tokio.workspace = true

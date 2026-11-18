@@ -1,0 +1,15 @@
+[package]
+name = "oxsession-axum"
+description = "Axum adapter for oXSession: cookie extraction and credential resolution"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+axum.workspace = true
+oxsession-core.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tower = { version = "0.5", features = ["util"] }

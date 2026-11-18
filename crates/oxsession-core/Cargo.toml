@@ -1,0 +1,9 @@
+[package]
+name = "oxsession-core"
+description = "Framework-agnostic core for oXSession: cookie wire format, credentials, errors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
