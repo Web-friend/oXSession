@@ -175,6 +175,7 @@ impl NodeCookieSigner {
     }
 
     /// Promote a new current key, retaining the old key for verification.
+    #[napi]
     pub fn rotate(&mut self, key_id: String, key_base64url: String) -> Result<()> {
         self.inner
             .rotate(
@@ -191,11 +192,13 @@ impl NodeCookieSigner {
     }
 
     /// Sign a cookie payload.
+    #[napi]
     pub fn sign(&self, name: String, payload: String) -> Result<String> {
         self.inner.sign(&name, &payload).map_err(sign_error)
     }
 
     /// Verify a cookie value and return its payload.
+    #[napi]
     pub fn verify(&self, name: String, wire: String) -> Result<String> {
         self.inner
             .verify(&name, &wire)
@@ -250,6 +253,7 @@ impl NodeSessionManager {
     }
 
     /// Create a session using the current system time.
+    #[napi]
     pub async fn create(&self, subject: String) -> Result<SessionRecord> {
         if subject.len() > MAX_SUBJECT_BYTES {
             return Err(js_error(
@@ -265,6 +269,7 @@ impl NodeSessionManager {
     }
 
     /// Validate a session and refresh its idle expiry.
+    #[napi]
     pub async fn validate(&self, id: String) -> Result<SessionRecord> {
         let id = parse_session_id(&id)?;
         self.inner
@@ -275,12 +280,14 @@ impl NodeSessionManager {
     }
 
     /// Revoke a session. Returns false if it did not exist.
+    #[napi]
     pub async fn revoke(&self, id: String) -> Result<bool> {
         let id = parse_session_id(&id)?;
         self.inner.revoke(&id).await.map_err(session_error)
     }
 
     /// Replace a session id and invalidate the old id.
+    #[napi]
     pub async fn rotate(&self, id: String) -> Result<SessionRecord> {
         let id = parse_session_id(&id)?;
         self.inner

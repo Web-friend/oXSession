@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="oxession.png" alt="oXSession mascot: a smiling crab holding a ring of keys" width="480">
+</p>
+
 # oXSession
 
 A platform-agnostic authentication toolkit for Rust: sessions, cookies, and
@@ -155,6 +159,11 @@ a client holding the raw id bypasses the signature check entirely, because the
 id is the credential. Signing defends the cookie carrier against forgery and
 name replay, not the token.
 
+For a React or other browser SPA, see [`docs/react.md`](docs/react.md). There is
+no browser package: the app talks to the HTTP surface, with a same-origin
+`HttpOnly` cookie through a dev proxy as the recommended setup. The server has
+no CORS layer, so direct cross-origin calls need a proxy or a server change.
+
 ## Signed cookies (opt-in)
 
 Signing is a policy decision, not a transport rule: preferences stay unsigned,
@@ -260,11 +269,18 @@ No dotenv files are loaded.
 cargo test --workspace
 ```
 
-124 tests cover the parser's edge cases (quoted values, malformed pairs,
-duplicate names, size and pair limits), prefix rules, credential precedence,
-the published signing vector and tampering matrix, session expiry and sliding,
-store eviction, every delivery mode, and the endpoints end-to-end through a real
-router.
+141 tests (including two doctests) cover the parser's edge cases (quoted values,
+malformed pairs, duplicate names, size and pair limits), prefix rules, credential
+precedence, the published signing vector and tampering matrix, session expiry
+and sliding, store eviction, every delivery mode, and the endpoints end-to-end
+through a real router. The Node addon builds but has no runtime test suite yet.
+
+## Agent skills
+
+Agent-oriented playbooks live in [`skills/`](skills). Start with
+[`AGENTS.md`](AGENTS.md) for the repository rules, the dependency direction, and
+task routing, then load the matching `skills/<name>/SKILL.md`. The index and
+loading instructions are in [`skills/README.md`](skills/README.md).
 
 ## Roadmap
 

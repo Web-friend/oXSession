@@ -30,45 +30,47 @@ function wrapAsync(fn) {
   }
 }
 
-class CookieSigner extends native.CookieSigner {
+class CookieSigner {
   constructor(keyId, keyBase64url) {
     try {
-      super(keyId, keyBase64url)
+      this.inner = new native.CookieSigner(keyId, keyBase64url)
     } catch (error) {
       throw normalizeError(error)
     }
   }
 
+  get keyId() { return this.inner.keyId }
+
   addPrevious(keyId, keyBase64url) {
-    return wrapSync(super.addPrevious.bind(this))(keyId, keyBase64url)
+    return wrapSync(this.inner.addPrevious.bind(this.inner))(keyId, keyBase64url)
   }
 
   rotate(keyId, keyBase64url) {
-    return wrapSync(super.rotate.bind(this))(keyId, keyBase64url)
+    return wrapSync(this.inner.rotate.bind(this.inner))(keyId, keyBase64url)
   }
 
   sign(name, payload) {
-    return wrapSync(super.sign.bind(this))(name, payload)
+    return wrapSync(this.inner.sign.bind(this.inner))(name, payload)
   }
 
   verify(name, wire) {
-    return wrapSync(super.verify.bind(this))(name, wire)
+    return wrapSync(this.inner.verify.bind(this.inner))(name, wire)
   }
 }
 
-class SessionManager extends native.SessionManager {
+class SessionManager {
   constructor(ttlSeconds, absoluteTtlSeconds) {
     try {
-      super(ttlSeconds, absoluteTtlSeconds)
+      this.inner = new native.SessionManager(ttlSeconds, absoluteTtlSeconds)
     } catch (error) {
       throw normalizeError(error)
     }
   }
 
-  create(subject) { return wrapAsync(super.create.bind(this))(subject) }
-  validate(id) { return wrapAsync(super.validate.bind(this))(id) }
-  revoke(id) { return wrapAsync(super.revoke.bind(this))(id) }
-  rotate(id) { return wrapAsync(super.rotate.bind(this))(id) }
+  create(subject) { return wrapAsync(this.inner.create.bind(this.inner))(subject) }
+  validate(id) { return wrapAsync(this.inner.validate.bind(this.inner))(id) }
+  revoke(id) { return wrapAsync(this.inner.revoke.bind(this.inner))(id) }
+  rotate(id) { return wrapAsync(this.inner.rotate.bind(this.inner))(id) }
 }
 
 module.exports = {
