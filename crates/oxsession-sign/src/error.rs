@@ -14,6 +14,8 @@ pub enum Error {
     InvalidKeyEncoding,
     /// More than [`MAX_PREVIOUS_KEYS`](crate::MAX_PREVIOUS_KEYS) retired keys.
     TooManyKeys,
+    /// A key id is already used by the current or a retired key.
+    DuplicateKeyId,
     /// The cookie name is not an RFC 7230 token.
     InvalidCookieName,
     /// The payload is empty, contains `.`, or is not cookie-octets.
@@ -30,6 +32,37 @@ pub enum Error {
     BadMac,
 }
 
+/// Stable, sanitized error class for language bindings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Invalid cookie, payload, or signed value.
+    InvalidInput,
+    /// Invalid signing configuration.
+    Configuration,
+    /// The signed value could not be authenticated.
+    SignatureFailure,
+}
+
+impl Error {
+    /// Return a stable category without exposing key material or wire values.
+    #[must_use]
+    pub const fn category(&self) -> ErrorCategory {
+        match self {
+            Self::InvalidCookieName
+            | Self::PayloadNotEncodable
+            | Self::TooLong
+            | Self::Malformed
+            | Self::UnsupportedVersion => ErrorCategory::InvalidInput,
+            Self::KeySize
+            | Self::InvalidKeyId
+            | Self::InvalidKeyEncoding
+            | Self::TooManyKeys
+            | Self::DuplicateKeyId => ErrorCategory::Configuration,
+            Self::UnknownKey | Self::BadMac => ErrorCategory::SignatureFailure,
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -39,6 +72,7 @@ impl fmt::Display for Error {
             }
             Self::InvalidKeyEncoding => formatter.write_str("key is not unpadded base64url"),
             Self::TooManyKeys => formatter.write_str("too many retired keys"),
+            Self::DuplicateKeyId => formatter.write_str("duplicate signing key id"),
             Self::InvalidCookieName => formatter.write_str("invalid cookie name"),
             Self::PayloadNotEncodable => {
                 formatter.write_str("payload must be non-empty cookie-octets without '.'")
@@ -53,3 +87,22 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapper_categories_hide_signature_details() {
+        assert_eq!(Error::BadMac.category(), ErrorCategory::SignatureFailure);
+        assert_eq!(
+            Error::UnknownKey.category(),
+            ErrorCategory::SignatureFailure
+        );
+        assert_eq!(
+            Error::DuplicateKeyId.category(),
+            ErrorCategory::Configuration
+        );
+        assert!(!Error::BadMac.to_string().contains("key"));
+    }
+}

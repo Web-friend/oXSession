@@ -3,8 +3,8 @@
 Running status log for oXSession. What is built, what is missing, and what is
 known to be inconsistent.
 
-Last updated: 2026-11-18, after `ba32011`.
-All commits below are on `main`; the working tree is clean.
+Last updated: 2026-11-20.
+Approved Node.js native-addon readiness work is implemented in the working tree.
 
 ## Snapshot
 
@@ -12,16 +12,16 @@ All commits below are on `main`; the working tree is clean.
 | --- | --- |
 | Crates | 5 — `core`, `sign`, `session`, `axum`, `server` |
 | Framework/DB assumptions in core | none (zero dependencies) |
-| Tests | 124 (122 unit/integration + 2 doctests), 0 warnings |
+| Tests | 141 (139 unit/integration + 2 doctests) |
 | Aux deps | `axum` only in the adapter and binary |
 | Licence | MIT |
 | Persistence | in-memory only |
 | Identity provider | none (`POST /sessions` behind `AUTH_DEV_LOGIN`) |
 
 ```
-cargo test --workspace      # 124 passed
+cargo test --workspace      # 141 passed
 cargo fmt --all --check     # clean
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
+cargo doc --workspace --no-deps   # clean
 ```
 
 ## Done
@@ -56,7 +56,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
       be non-empty cookie-octets with no `.`.
 - [x] Published interop vector + 6-line Python reference in
       [`docs/signing.md`](docs/signing.md).
-- [x] Tested: 8 unit + 10 interop tests (vector, tamper matrix, rotation,
+- [x] Current and retired key IDs must be unique; `with_previous` and `rotate`
+      return `DuplicateKeyId` without changing the key ring on collision.
+- [x] Wrapper-facing `ErrorCategory` distinguishes invalid input,
+      configuration, and signature failures without exposing key material.
+- [x] Tested: 9 unit + 11 interop tests (vector, tamper matrix, rotation,
       name binding, size limits).
 
 ### Sessions — `oxsession-core` (model) + `oxsession-session` (policy/store)
@@ -73,6 +77,12 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
 - [x] `Policy` rejects `ttl == 0` and `absolute_ttl < ttl`.
 - [x] `MemoryStore` reference adapter: capacity-bounded, evicts the session
       closest to expiry, explicitly documented as not durable.
+- [x] Subjects are limited to 1,024 UTF-8 bytes; oversized values return
+      `SubjectTooLong`, with a separate wrapper-facing category.
+- [x] Session and core wrapper-facing error categories distinguish invalid
+      subjects, missing/expired sessions, missing/ambiguous credentials,
+      entropy failures, and storage failures. Store details stay out of
+      `Display` messages.
 - [x] Tested: 17 manager/store tests + 4 model tests inside core.
 
 ### HTTP surface — `oxsession-axum` + `oxsession-server`
@@ -96,6 +106,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
       delivery mode; `AUTH_DEV_LOGIN` prints a startup warning.
 - [x] Graceful shutdown on Ctrl+C / SIGTERM.
 - [x] `lib.rs` + `AppState` so the router is testable without binding a socket.
+- [x] Documented the future N-API (`napi-rs` default) wrapper operations:
+      cookie parsing, credential resolution, signing/verification, and session
+      create/validate/revoke/rotate. Its initial Rust-owned `MemoryStore` is
+      process-local and non-durable; persistence and JavaScript store callbacks
+      are outside the boundary. See [`docs/sessions.md`](docs/sessions.md).
 - [x] Tested: 12 config/route unit tests, 26 end-to-end endpoint tests, 8 + 7
       adapter tests.
 
@@ -136,13 +151,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
 - [ ] **`logout` swallows revocation failures.** A store error is logged and the
       cookie is still cleared, so the client believes it logged out while the
       server-side session survives until expiry.
-- [ ] **`rotate` can leave two live sessions.** It creates the replacement
-      *then* deletes the old id; a failed delete leaves both valid. Delete-first
-      or unconditional replacement is safer.
-- [ ] **Duplicate key ids are accepted in `AUTH_COOKIE_KEYS`.**
-      `CookieSigner::with_previous` never checks the id against the current or
-      retired keys, so `k1:new,k1:old` silently makes old cookies fail with
-      `BadMac` instead of failing configuration.
+- [x] **Rotation deletes the old session before replacement.** A failed delete
+      leaves the original as the only session; a later creation failure cannot
+      leave two live ids.
+- [x] **Signing key ids are unique.** Construction and rotation reject an id
+      already used by the current or a retired key.
 - [ ] **Secrets live in environment variables.** `AUTH_COOKIE_KEYS` is visible
       in `/proc/<pid>/environ`, `docker inspect`, and shell history. No
       file/secret-manager loader.
@@ -151,8 +164,8 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
 - [ ] **No rate limiting.** `POST /sessions` (when dev-login is on) and
       `/logout` are unthrottled; `MemoryStore` eviction means a session flood
       can evict other users' sessions.
-- [ ] **Unbounded subject length.** Only empty/whitespace subjects are rejected;
-      a multi-megabyte subject is stored as-is.
+- [x] Session subjects are limited to 1,024 UTF-8 bytes, with a distinct
+      `SubjectTooLong` error.
 
 ### Platform breadth
 
@@ -194,6 +207,10 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
 
 ### Project hygiene
 
+- [x] Future N-API wrapper contract is documented: core auth/session operations,
+      sanitized error categories, and an addon-owned process-local,
+      non-durable `MemoryStore` boundary.
+
 - [ ] No CI. Nothing runs `fmt`, `clippy`, `test`, `doc` on push.
 - [ ] `cargo clippy` is not installed in the dev toolchain and is not part of any
       workflow; only rustc/build warnings are checked today.
@@ -218,15 +235,12 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
 | `/me` returns a new `expires_at` but the browser cookie still expires on the original schedule | sliding expiry is store-side; `/me` never re-issues `Set-Cookie` |
 | Config accepts `__Host-` names that cannot be serialized | prefix rules are checked in `SetCookie::build`, not in `Config::from_env` |
 | `both` mode sets a cookie *and* a token that decode to the same id, but only the cookie is signed | signature wraps the carrier, not the id — by design |
-| `AUTH_COOKIE_KEYS=k1:a,k1:b` loads successfully but rejects half the cookies | `with_previous` does not check id uniqueness |
+| Duplicate signing key ids fail configuration/rotation | `with_previous` and `rotate` reject ids already in the key ring |
 | A failed logout still returns `204` and clears the cookie | revocation errors are logged, not surfaced |
 
 ## Next steps, in order
 
-1. Fix the four correctness items that can bite in production: cookie
-   re-issue on sliding expiry, startup validation of cookie prefixes and
-   `Secure`, enforced `Secure` outside loopback, and delete-before-create in
-   `rotate`.
+1. Cookie re-issue on sliding expiry.
 2. Start the adapter conformance suite, then implement PostgreSQL against it.
 3. Schedule `purge_expired` (or document that the adapter owns sweeping).
 4. Replace `println!`/`eprintln!` with `tracing` and add request ids.
@@ -238,14 +252,14 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
 ```
 $ cargo test --workspace
 oxsession-axum     unit 3   credentials 8   signed 7
-oxsession-core     unit 31
-oxsession-server   unit 12  bin 0   sessions 26
-oxsession-session  unit 17  doctest 1
-oxsession-sign     unit 8   interop 10  doctest 1
-                                     total 124 passed, 0 failed
+oxsession-core     unit 32
+oxsession-server   unit 16  bin 0   sessions 31
+oxsession-session  unit 22  doctest 1
+oxsession-sign     unit 9   interop 11  doctest 1
+                                     total 141 passed, 0 failed
 
 $ cargo build --workspace          # 0 warnings
-$ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps   # clean
+$ cargo doc --workspace --no-deps                              # clean
 $ node --check examples/localstorage.js                        # ok
 ```
 

@@ -4,7 +4,7 @@
 //! store, so a request is the only thing that is simulated.
 
 use std::collections::HashMap;
-use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, RwLock};
+use std::sync::{Arc, RwLock, atomic::AtomicBool, atomic::Ordering};
 
 use axum::{
     Router,
@@ -710,11 +710,7 @@ impl SessionStore for RevokeFailsStore {
         Ok(self.sessions.read().unwrap().get(id).cloned())
     }
 
-    async fn touch(
-        &self,
-        _id: &SessionId,
-        _expires_at: u64,
-    ) -> Result<bool, Self::Error> {
+    async fn touch(&self, _id: &SessionId, _expires_at: u64) -> Result<bool, Self::Error> {
         Ok(true)
     }
 

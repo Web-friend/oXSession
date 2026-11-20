@@ -14,6 +14,9 @@ pub const DEFAULT_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
 /// Default absolute lifetime: thirty days, regardless of activity.
 pub const DEFAULT_ABSOLUTE_TTL_SECONDS: u64 = 30 * 24 * 60 * 60;
 
+/// Maximum session subject size in UTF-8 bytes.
+pub const MAX_SUBJECT_BYTES: usize = 1_024;
+
 /// Session id length in bytes, before base64url encoding.
 const SESSION_ID_BYTES: usize = 32;
 
@@ -130,11 +133,15 @@ impl<S: SessionStore> SessionManager<S> {
     /// # Errors
     ///
     /// [`Error::InvalidSubject`] for an empty or whitespace-only subject,
+    /// [`Error::SubjectTooLong`] when it exceeds [`MAX_SUBJECT_BYTES`],
     /// [`Error::Entropy`] when randomness is unavailable, and [`Error::Store`]
     /// when the adapter fails.
     pub async fn create(&self, subject: &str, now: u64) -> Result<Session, Error> {
         if subject.trim().is_empty() {
             return Err(Error::InvalidSubject);
+        }
+        if subject.len() > MAX_SUBJECT_BYTES {
+            return Err(Error::SubjectTooLong);
         }
 
         let id = generate_id()?;
@@ -232,7 +239,7 @@ fn generate_id() -> Result<SessionId, Error> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::{atomic::AtomicBool, atomic::Ordering, RwLock};
+    use std::sync::{RwLock, atomic::AtomicBool, atomic::Ordering};
 
     use oxsession_core::SessionStore;
 
@@ -278,11 +285,7 @@ mod tests {
             Ok(self.sessions.read().unwrap().get(id).cloned())
         }
 
-        async fn touch(
-            &self,
-            id: &SessionId,
-            expires_at: u64,
-        ) -> Result<bool, Self::Error> {
+        async fn touch(&self, id: &SessionId, expires_at: u64) -> Result<bool, Self::Error> {
             let mut sessions = self.sessions.write().unwrap();
             match sessions.get_mut(id) {
                 Some(session) => {
@@ -415,6 +418,20 @@ mod tests {
         assert!(matches!(
             manager.create("   ", 1_000).await,
             Err(Error::InvalidSubject)
+        ));
+    }
+
+    #[tokio::test]
+    async fn enforces_utf8_subject_size_limit() {
+        let manager = manager(short_policy());
+        let at_limit = "é".repeat(MAX_SUBJECT_BYTES / 2);
+        assert_eq!(at_limit.len(), MAX_SUBJECT_BYTES);
+        assert!(manager.create(&at_limit, 1_000).await.is_ok());
+
+        let over_limit = format!("{at_limit}a");
+        assert!(matches!(
+            manager.create(&over_limit, 1_000).await,
+            Err(Error::SubjectTooLong)
         ));
     }
 

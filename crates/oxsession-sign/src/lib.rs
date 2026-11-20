@@ -50,7 +50,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-pub use error::Error;
+pub use error::{Error, ErrorCategory};
 pub use key::{KEY_BYTES, KeyId, MAX_KEY_ID_BYTES, SecretKey};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -100,8 +100,12 @@ impl CookieSigner {
     /// # Errors
     ///
     /// Returns [`Error::TooManyKeys`] once [`MAX_PREVIOUS_KEYS`] retired keys
-    /// are already stored.
+    /// are already stored, or [`Error::DuplicateKeyId`] if `key_id` is already
+    /// in the ring.
     pub fn with_previous(mut self, key_id: KeyId, key: SecretKey) -> Result<Self, Error> {
+        if self.contains_key_id(key_id.as_str()) {
+            return Err(Error::DuplicateKeyId);
+        }
         if self.previous.len() == MAX_PREVIOUS_KEYS {
             return Err(Error::TooManyKeys);
         }
@@ -113,7 +117,14 @@ impl CookieSigner {
     }
 
     /// Promote a new current key, retiring the old one for verification.
-    pub fn rotate(&mut self, key_id: KeyId, key: SecretKey) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DuplicateKeyId`] if `key_id` is already in the ring.
+    pub fn rotate(&mut self, key_id: KeyId, key: SecretKey) -> Result<(), Error> {
+        if self.contains_key_id(key_id.as_str()) {
+            return Err(Error::DuplicateKeyId);
+        }
         let retired = std::mem::replace(
             &mut self.current,
             SigningKey {
@@ -123,6 +134,7 @@ impl CookieSigner {
         );
         self.previous.insert(0, retired);
         self.previous.truncate(MAX_PREVIOUS_KEYS);
+        Ok(())
     }
 
     /// The id of the key used for signing.
@@ -198,6 +210,11 @@ impl CookieSigner {
             .iter()
             .find(|key| key.id.as_str() == key_id)
             .map(|key| &key.secret)
+    }
+
+    fn contains_key_id(&self, key_id: &str) -> bool {
+        self.current.id.as_str() == key_id
+            || self.previous.iter().any(|key| key.id.as_str() == key_id)
     }
 }
 

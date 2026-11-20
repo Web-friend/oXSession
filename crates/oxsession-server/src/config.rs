@@ -5,9 +5,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use oxsession_core::Prefix;
 use oxsession_session::Policy;
 use oxsession_sign::{CookieSigner, KeyId, SecretKey};
-use oxsession_core::Prefix;
 
 /// Configuration of the standalone server.
 ///
@@ -103,7 +103,9 @@ impl Config {
         // listens outside loopback must require the flag. `127.0.0.1` and `::1`
         // (and any other loopback address) are exempt for local development.
         if !ip.is_loopback() && !session_cookie_secure {
-            bail!("AUTH_SESSION_COOKIE_SECURE must be enabled when binding to a non-loopback address {ip}; session cookies would otherwise be sent in clear text");
+            bail!(
+                "AUTH_SESSION_COOKIE_SECURE must be enabled when binding to a non-loopback address {ip}; session cookies would otherwise be sent in clear text"
+            );
         }
 
         Ok(Self {

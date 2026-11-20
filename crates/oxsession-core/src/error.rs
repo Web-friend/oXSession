@@ -29,6 +29,29 @@ pub enum Error {
     SameSiteNoneRequiresSecure,
 }
 
+/// Stable, sanitized error class for language bindings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorCategory {
+    /// Malformed or otherwise invalid input.
+    InvalidInput,
+    /// No usable credential was supplied.
+    MissingCredential,
+    /// More than one matching credential was supplied.
+    AmbiguousCredential,
+}
+
+impl Error {
+    /// Return a stable category without exposing header contents.
+    #[must_use]
+    pub const fn category(&self) -> ErrorCategory {
+        match self {
+            Self::Unauthenticated => ErrorCategory::MissingCredential,
+            Self::Ambiguous(_) => ErrorCategory::AmbiguousCredential,
+            _ => ErrorCategory::InvalidInput,
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -51,6 +74,23 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapper_categories_separate_missing_and_ambiguous_credentials() {
+        assert_eq!(
+            Error::Unauthenticated.category(),
+            ErrorCategory::MissingCredential
+        );
+        assert_eq!(
+            Error::Ambiguous(Ambiguous::Duplicate { count: 2 }).category(),
+            ErrorCategory::AmbiguousCredential
+        );
+    }
+}
 
 impl fmt::Display for Ambiguous {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

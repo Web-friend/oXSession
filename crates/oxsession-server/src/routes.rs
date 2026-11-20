@@ -18,13 +18,13 @@ use serde::{Deserialize, Serialize};
 use crate::config::Config;
 use crate::state::{AppState, MemoryAppState};
 
-pub fn router(config: Config) -> Router<MemoryAppState> {
+pub fn router(config: Config) -> Router {
     router_with_state(MemoryAppState::new(config, MemoryStore::new()))
 }
 
 /// Build the router from an already-assembled [`AppState`], so tests can inject
 /// a custom store (for example one whose revocation fails).
-pub fn router_with_state<S: SessionStore>(state: AppState<S>) -> Router<AppState<S>> {
+pub fn router_with_state<S: SessionStore + 'static>(state: AppState<S>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/me", get(me))
@@ -355,6 +355,11 @@ impl IntoResponse for ApiError {
             Self::Session(SessionError::InvalidSubject) => {
                 (StatusCode::BAD_REQUEST, "subject must not be empty").into_response()
             }
+            Self::Session(SessionError::SubjectTooLong) => (
+                StatusCode::BAD_REQUEST,
+                "subject exceeds the 1024-byte limit",
+            )
+                .into_response(),
             Self::Session(error @ (SessionError::Store(_) | SessionError::Entropy)) => {
                 eprintln!("session failure: {error}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()
@@ -412,7 +417,7 @@ mod tests {
     #[test]
     fn session_cookies_are_http_only_and_scoped_to_root() {
         let config = config();
-        let cookie = session_cookie(&config, "abc").unwrap();
+        let cookie = session_cookie(&config, "abc", 7 * 24 * 60 * 60).unwrap();
         assert_eq!(
             cookie.encode(),
             "session=abc; Path=/; Max-Age=604800; HttpOnly; SameSite=Lax"
@@ -423,7 +428,7 @@ mod tests {
     fn secure_cookies_require_the_flag() {
         let mut config = config();
         config.session_cookie_secure = true;
-        let cookie = session_cookie(&config, "abc").unwrap();
+        let cookie = session_cookie(&config, "abc", 7 * 24 * 60 * 60).unwrap();
         assert!(cookie.encode().contains("; Secure"));
     }
 

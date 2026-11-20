@@ -27,8 +27,9 @@ mod error;
 mod manager;
 mod memory;
 
-pub use error::Error;
+pub use error::{Error, ErrorCategory};
 pub use manager::{
-    DEFAULT_ABSOLUTE_TTL_SECONDS, DEFAULT_TTL_SECONDS, InvalidPolicy, Policy, SessionManager, now,
+    DEFAULT_ABSOLUTE_TTL_SECONDS, DEFAULT_TTL_SECONDS, InvalidPolicy, MAX_SUBJECT_BYTES, Policy,
+    SessionManager, now,
 };
 pub use memory::{DEFAULT_CAPACITY, MemoryStore, MemoryStoreError};

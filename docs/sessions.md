@@ -22,11 +22,11 @@ it is exactly what a client presents.
 
 | Step | Rule |
 | --- | --- |
-| Create | 32 bytes from the OS RNG; empty subjects rejected |
+| Create | 32 bytes from the OS RNG; empty subjects and subjects over 1,024 UTF-8 bytes rejected |
 | Validate | Unknown → `NotFound`; past idle or absolute deadline → delete, then `Expired` |
 | Refresh | On valid use, `expires_at = min(now + ttl, issued_at + absolute_ttl)` |
 | Revoke | `delete`; the cookie is cleared in the same response |
-| Rotate | Validate, create a replacement, delete the old id |
+| Rotate | Validate, delete the old id, then create a replacement |
 | Purge | `delete_expired(now)` for periodic cleanup; the manager never sweeps |
 
 Time is passed in explicitly (`now: u64`) instead of read inside the store or
@@ -34,6 +34,23 @@ manager. Tests, batch jobs, and clock-skew handling all need that.
 
 Defaults: 7 days idle, 30 days absolute. Both are configurable per deployment;
 `Policy` rejects `ttl == 0` and `absolute_ttl < ttl`.
+
+## Rust and future addon boundary
+
+The Rust primitives intended for a future N-API wrapper are `Pairs::parse` for
+cookie parsing, `resolve` for credential resolution, `CookieSigner::sign` and
+`verify` for cookie signing, and `SessionManager::{create, validate, revoke,
+rotate}` for session lifecycle. The wrapper should own a Rust `MemoryStore` and
+keep it process-local and non-durable; sessions disappear on restart, and
+separate addon processes do not share sessions. Persistent storage and
+JavaScript store callbacks are outside the initial wrapper contract.
+
+Wrapper errors should use the public sanitized `ErrorCategory` values. Empty
+and oversized subjects, missing and expired sessions, signature failures,
+entropy failures, and storage failures remain distinguishable. Storage error display
+does not include adapter details; detailed sources are available only for
+internal Rust diagnostics. Session ids and signing secrets are never included
+in these categories or public messages.
 
 ## Cookie attributes
 

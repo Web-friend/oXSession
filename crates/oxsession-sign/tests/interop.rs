@@ -105,7 +105,7 @@ fn rotation_keeps_old_cookies_valid() {
     let old_wire = signer().sign("session", "old").unwrap();
 
     let mut rotated = signer();
-    rotated.rotate(key_id("k2"), secret(2));
+    rotated.rotate(key_id("k2"), secret(2)).unwrap();
 
     assert_eq!(rotated.key_id(), "k2");
     assert_eq!(rotated.verify("session", &old_wire).unwrap(), "old");
@@ -122,13 +122,13 @@ fn retired_keys_are_bounded() {
         .sign("session", "x")
         .unwrap();
 
-    signer.rotate(key_id("k2"), secret(2));
-    signer.rotate(key_id("k3"), secret(3));
+    signer.rotate(key_id("k2"), secret(2)).unwrap();
+    signer.rotate(key_id("k3"), secret(3)).unwrap();
     assert_eq!(signer.verify("session", &with_k1).unwrap(), "x");
 
     // A third rotation pushes k1 out of the ring: only one key id may be
     // unknown to verify anymore.
-    signer.rotate(key_id("k4"), secret(4));
+    signer.rotate(key_id("k4"), secret(4)).unwrap();
     assert_eq!(
         signer.verify("session", &with_k1).unwrap_err(),
         Error::UnknownKey
@@ -141,6 +141,24 @@ fn retired_keys_are_bounded() {
         .unwrap()
         .with_previous(key_id("k8"), secret(4));
     assert_eq!(too_many.unwrap_err(), Error::TooManyKeys);
+}
+
+#[test]
+fn duplicate_ids_are_rejected_during_construction_and_rotation() {
+    let duplicate =
+        CookieSigner::new(key_id("k1"), secret(1)).with_previous(key_id("k1"), secret(2));
+    assert_eq!(duplicate.unwrap_err(), Error::DuplicateKeyId);
+
+    let mut signer = signer().with_previous(key_id("k0"), secret(0)).unwrap();
+    assert_eq!(
+        signer.rotate(key_id("k0"), secret(3)),
+        Err(Error::DuplicateKeyId)
+    );
+    assert_eq!(
+        signer.rotate(key_id("k1"), secret(3)),
+        Err(Error::DuplicateKeyId)
+    );
+    assert_eq!(signer.key_id(), "k1");
 }
 
 #[test]

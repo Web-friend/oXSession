@@ -86,6 +86,19 @@ deployment needs a durable adapter with the same contract.
 
 `SessionId` is a credential, so its `Debug` output is redacted — leaking a
 session id into a log line is a login.
+Subjects are limited to 1,024 UTF-8 bytes. The session error categories expose
+invalid input, missing or expired sessions, entropy failure, and storage failure
+without including backend details in public error text.
+
+### Future Node.js addon
+
+The planned N-API wrapper (with `napi-rs` as the default binding approach) will
+expose cookie parsing, credential resolution, signing and verification, and
+session create, validate, revoke, and rotate. Its first version will own a Rust
+`MemoryStore`, which is process-local and non-durable: sessions are lost on
+restart and are not shared across processes. Persistent stores and JavaScript
+store callbacks are outside this initial boundary. See
+[`docs/sessions.md`](docs/sessions.md) for the operation and error contract.
 
 ### Delivering the credential
 

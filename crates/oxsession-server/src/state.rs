@@ -9,10 +9,19 @@ use crate::config::Config;
 ///
 /// The store is process-local for now; swapping in a SQL adapter changes the
 /// type parameter and nothing else, because handlers only see [`SessionManager`].
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct AppState<S: SessionStore> {
     pub config: Config,
     pub sessions: Arc<SessionManager<S>>,
+}
+
+impl<S: SessionStore> Clone for AppState<S> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            sessions: Arc::clone(&self.sessions),
+        }
+    }
 }
 
 impl<S: SessionStore> AppState<S> {

@@ -67,6 +67,10 @@ def sign(key: bytes, keyid: str, name: str, payload: str) -> str:
   which would let an attacker keep a long-dead key usable.
 * Retention is bounded on purpose: every retained key authenticates cookies, so
   rotate and then let the old cookie lifetime expire.
+* The current id and every retained id must be unique. `with_previous` and
+  `rotate` return `DuplicateKeyId` on collisions without changing the signer.
+* Wrapper-facing `ErrorCategory` values group malformed input, configuration,
+  and signature failures. Unknown key and bad MAC share the signature category.
 
 ## Not encryption
 
