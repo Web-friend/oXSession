@@ -1,0 +1,21 @@
+[package]
+name = "oxsession-node"
+description = "Node.js N-API wrapper for oXSession"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi.workspace = true
+napi-derive.workspace = true
+oxsession-core.workspace = true
+oxsession-session.workspace = true
+oxsession-sign.workspace = true
+
+[build-dependencies]
+napi-build.workspace = true

@@ -4,16 +4,16 @@ Running status log for oXSession. What is built, what is missing, and what is
 known to be inconsistent.
 
 Last updated: 2026-11-20.
-Approved Node.js native-addon readiness work is implemented in the working tree.
+Node.js N-API addon implementation is in the working tree; it builds locally.
 
 ## Snapshot
 
 | | |
 | --- | --- |
-| Crates | 5 — `core`, `sign`, `session`, `axum`, `server` |
+| Crates | 6 — `core`, `sign`, `session`, `axum`, `server`, `node` |
 | Framework/DB assumptions in core | none (zero dependencies) |
-| Tests | 141 (139 unit/integration + 2 doctests) |
-| Aux deps | `axum` only in the adapter and binary |
+| Tests | 141 (139 unit/integration + 2 doctests; addon has no tests yet) |
+| Aux deps | `axum` in the adapter/server; `napi-rs` in the Node addon |
 | Licence | MIT |
 | Persistence | in-memory only |
 | Identity provider | none (`POST /sessions` behind `AUTH_DEV_LOGIN`) |
@@ -106,11 +106,16 @@ cargo doc --workspace --no-deps   # clean
       delivery mode; `AUTH_DEV_LOGIN` prints a startup warning.
 - [x] Graceful shutdown on Ctrl+C / SIGTERM.
 - [x] `lib.rs` + `AppState` so the router is testable without binding a socket.
-- [x] Documented the future N-API (`napi-rs` default) wrapper operations:
-      cookie parsing, credential resolution, signing/verification, and session
-      create/validate/revoke/rotate. Its initial Rust-owned `MemoryStore` is
+- [x] `oxsession-node` N-API package (`napi-rs`) exposes cookie parsing,
+      credential resolution, signing/verification, and session
+      create/validate/revoke/rotate. The Rust-owned `MemoryStore` is
       process-local and non-durable; persistence and JavaScript store callbacks
-      are outside the boundary. See [`docs/sessions.md`](docs/sessions.md).
+      are outside the boundary. Build with `npm run build` in its package dir.
+- [x] CommonJS entry point and TypeScript declarations are included. JS errors
+      expose stable `.code` values; signature failures do not reveal whether
+      the key id was unknown or the MAC was invalid.
+- [x] `npm run build` compiles the release cdylib and copies it to
+      `oxsession.node`. The generated platform-specific binary is git-ignored.
 - [x] Tested: 12 config/route unit tests, 26 end-to-end endpoint tests, 8 + 7
       adapter tests.
 
@@ -207,9 +212,10 @@ cargo doc --workspace --no-deps   # clean
 
 ### Project hygiene
 
-- [x] Future N-API wrapper contract is documented: core auth/session operations,
-      sanitized error categories, and an addon-owned process-local,
-      non-durable `MemoryStore` boundary.
+- [x] Node.js N-API addon implementation exposes the core auth/session API with
+      stable sanitized `.code` categories and an addon-owned process-local,
+      non-durable `MemoryStore` boundary. Local release build and JavaScript
+      syntax checks pass; no native runtime integration tests are present yet.
 
 - [ ] No CI. Nothing runs `fmt`, `clippy`, `test`, `doc` on push.
 - [ ] `cargo clippy` is not installed in the dev toolchain and is not part of any
@@ -260,6 +266,9 @@ oxsession-sign     unit 9   interop 11  doctest 1
 
 $ cargo build --workspace          # 0 warnings
 $ cargo doc --workspace --no-deps                              # clean
+$ npm run build --prefix crates/oxsession-node                 # ok (local target)
+$ node --check crates/oxsession-node/index.js                  # ok
+$ node --check crates/oxsession-node/scripts/build.js           # ok
 $ node --check examples/localstorage.js                        # ok
 ```
 

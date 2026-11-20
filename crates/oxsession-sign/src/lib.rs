@@ -103,6 +103,18 @@ impl CookieSigner {
     /// are already stored, or [`Error::DuplicateKeyId`] if `key_id` is already
     /// in the ring.
     pub fn with_previous(mut self, key_id: KeyId, key: SecretKey) -> Result<Self, Error> {
+        self.add_previous(key_id, key)?;
+        Ok(self)
+    }
+
+    /// Retain an older key for verification, keeping newer keys as current.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TooManyKeys`] once [`MAX_PREVIOUS_KEYS`] retired keys
+    /// are already stored, or [`Error::DuplicateKeyId`] if `key_id` is already
+    /// in the ring. On error, the signer is unchanged.
+    pub fn add_previous(&mut self, key_id: KeyId, key: SecretKey) -> Result<(), Error> {
         if self.contains_key_id(key_id.as_str()) {
             return Err(Error::DuplicateKeyId);
         }
@@ -113,7 +125,7 @@ impl CookieSigner {
             id: key_id,
             secret: key,
         });
-        Ok(self)
+        Ok(())
     }
 
     /// Promote a new current key, retiring the old one for verification.

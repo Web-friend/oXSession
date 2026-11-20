@@ -35,22 +35,23 @@ manager. Tests, batch jobs, and clock-skew handling all need that.
 Defaults: 7 days idle, 30 days absolute. Both are configurable per deployment;
 `Policy` rejects `ttl == 0` and `absolute_ttl < ttl`.
 
-## Rust and future addon boundary
+## Rust and Node.js addon boundary
 
-The Rust primitives intended for a future N-API wrapper are `Pairs::parse` for
-cookie parsing, `resolve` for credential resolution, `CookieSigner::sign` and
-`verify` for cookie signing, and `SessionManager::{create, validate, revoke,
-rotate}` for session lifecycle. The wrapper should own a Rust `MemoryStore` and
-keep it process-local and non-durable; sessions disappear on restart, and
-separate addon processes do not share sessions. Persistent storage and
-JavaScript store callbacks are outside the initial wrapper contract.
+The `oxsession-node` N-API package exposes `Pairs::parse` for cookie parsing,
+`resolve` for credential resolution, `CookieSigner::sign` and `verify` for
+cookie signing, and `SessionManager::{create, validate, revoke, rotate}` for
+session lifecycle. It owns a Rust `MemoryStore` that is process-local and
+non-durable; sessions disappear on restart, and separate addon processes do
+not share sessions. Persistent storage and JavaScript store callbacks are
+outside the initial wrapper contract.
 
-Wrapper errors should use the public sanitized `ErrorCategory` values. Empty
-and oversized subjects, missing and expired sessions, signature failures,
-entropy failures, and storage failures remain distinguishable. Storage error display
-does not include adapter details; detailed sources are available only for
-internal Rust diagnostics. Session ids and signing secrets are never included
-in these categories or public messages.
+Rust callers can use the sanitized `ErrorCategory` types; Node callers receive
+the corresponding stable string on `error.code`. Empty and oversized subjects,
+missing and expired sessions, signature failures, entropy failures, and storage
+failures remain distinguishable. Store error display does not include adapter
+details; detailed sources are available only for internal Rust diagnostics.
+Session ids and signing secrets are never included in categories or public
+messages.
 
 ## Cookie attributes
 

@@ -90,15 +90,16 @@ Subjects are limited to 1,024 UTF-8 bytes. The session error categories expose
 invalid input, missing or expired sessions, entropy failure, and storage failure
 without including backend details in public error text.
 
-### Future Node.js addon
+### Node.js addon
 
-The planned N-API wrapper (with `napi-rs` as the default binding approach) will
-expose cookie parsing, credential resolution, signing and verification, and
-session create, validate, revoke, and rotate. Its first version will own a Rust
-`MemoryStore`, which is process-local and non-durable: sessions are lost on
-restart and are not shared across processes. Persistent stores and JavaScript
-store callbacks are outside this initial boundary. See
-[`docs/sessions.md`](docs/sessions.md) for the operation and error contract.
+[`oxsession-node`](crates/oxsession-node) is an N-API package built with
+`napi-rs`. It exposes cookie parsing, credential resolution, signing and
+verification, and session create, validate, revoke, and rotate. Its Rust-owned
+`MemoryStore` is process-local and non-durable: sessions are lost on restart and
+are not shared across processes. Build the native module from its package
+directory with `npm run build`. Persistent stores and JavaScript store
+callbacks are outside the initial boundary. See [`docs/sessions.md`](docs/sessions.md)
+for the operation and error contract.
 
 ### Delivering the credential
 
