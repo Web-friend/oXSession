@@ -145,4 +145,6 @@ Update all of these together:
 There is no frontend test harness in this repository. For docs or contract
 changes, verify with `curl` against a running server and check response headers
 in DevTools. See `docs/react.md` §16 for an MSW/Vitest setup you can copy into
-an app.
+an app. The sibling `React Demo Project` includes Playwright coverage for its
+React UI and Node addon HTTP API; run `npm run verify:container` there to build
+and exercise the Podman API container and print the informational benchmark.

@@ -163,6 +163,9 @@ For a React or other browser SPA, see [`docs/react.md`](docs/react.md). There is
 no browser package: the app talks to the HTTP surface, with a same-origin
 `HttpOnly` cookie through a dev proxy as the recommended setup. The server has
 no CORS layer, so direct cross-origin calls need a proxy or a server change.
+The companion [`React Demo Project`](../React%20Demo%20Project/README.md)
+includes Playwright browser coverage and a Podman-based API benchmark for the
+Node addon.
 
 ## Signed cookies (opt-in)
 
@@ -274,6 +277,15 @@ malformed pairs, duplicate names, size and pair limits), prefix rules, credentia
 precedence, the published signing vector and tampering matrix, session expiry
 and sliding, store eviction, every delivery mode, and the endpoints end-to-end
 through a real router. The Node addon builds but has no runtime test suite yet.
+
+The sibling React demo has browser/API checks and a serial benchmark. From
+`React Demo Project`, run `npm install`, install Chromium with
+`npx playwright install chromium`, then `npm run verify:container`. This builds
+the addon in a Rust Bookworm stage, runs the API in a Node Bookworm container,
+starts Vite for Playwright, and measures 500 API requests per operation after
+30 warmups. Podman publishes the API only on loopback. The demo README records
+the environment and measured timings; timings are informational and have no
+pass/fail thresholds.
 
 ## Agent skills
 
