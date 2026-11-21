@@ -8,7 +8,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ROOT / "skills"
-MIRRORS = (ROOT / ".claude" / "skills", ROOT / ".opencode" / "skills")
+MIRRORS = (
+    ROOT / ".agents" / "skills",
+    ROOT / ".claude" / "skills",
+    ROOT / ".opencode" / "skills",
+)
 ENTRY_POINTS = (
     "CLAUDE.md",
     "GEMINI.md",
@@ -16,6 +20,11 @@ ENTRY_POINTS = (
     ".windsurfrules",
     ".cursor/rules/oxsession.mdc",
     ".github/copilot-instructions.md",
+    ".devin/rules/oxsession.md",
+    ".agents/rules/oxsession.md",
+    ".clinerules/oxsession.md",
+    ".roo/rules/oxsession.md",
+    ".continue/rules/oxsession.md",
 )
 
 
@@ -128,6 +137,24 @@ def check_entry_points(errors: list[str]) -> None:
             fail(errors, f"{relative}: must point to AGENTS.md")
         if "skills/" not in content:
             fail(errors, f"{relative}: must point to the canonical skills/")
+        for target in re.findall(r"\]\(([^)]+)\)", content):
+            if target.startswith(("http://", "https://", "#")):
+                continue
+            if not (path.parent / target).resolve().exists():
+                fail(errors, f"{relative}: broken local link {target!r}")
+
+        if relative in (".agents/rules/oxsession.md", ".devin/rules/oxsession.md"):
+            if not content.startswith("---\n"):
+                fail(errors, f"{relative}: native rule must start with YAML frontmatter")
+                continue
+            frontmatter, separator, _ = content[4:].partition("\n---\n")
+            fields = {}
+            for line in frontmatter.splitlines():
+                key, field_separator, value = line.partition(":")
+                if field_separator:
+                    fields[key.strip()] = value.strip()
+            if not separator or fields.get("trigger") != "always_on":
+                fail(errors, f"{relative}: expected trigger: always_on frontmatter")
 
 
 def main() -> int:

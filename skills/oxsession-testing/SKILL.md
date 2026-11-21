@@ -41,7 +41,7 @@ node --check crates/oxsession-node/index.js
 | Eviction, capacity, poisoning | session | `src/memory.rs` |
 | Extractor behavior, signing helper | axum | `tests/credentials.rs`, `tests/signed.rs` |
 | Status codes, headers, delivery modes, logout | server | `tests/sessions.rs` |
-| Addon API and error codes | node | no runtime suite yet; build + `node --check` |
+| Addon API and error codes | node | Playwright suite in sibling `React Demo Project`; build + `node --check` |
 
 If a rule is observable through HTTP and also unit-testable, test it in both
 places only when the mapping itself is the risk (for example, `Ambiguous` →
@@ -119,8 +119,8 @@ yet; do not claim your adapter is conformant without the equivalents.
 ## Known gaps
 
 - No CI. Nothing runs these commands automatically.
-- No runtime tests for `oxsession-node`; only the release build and JS syntax
-  checks.
+- `oxsession-node` has no crate-local runtime suite. The sibling React demo
+  exercises the addon through its Node HTTP API with Playwright and Podman.
 - No fuzzing for `Pairs::parse` or the signed-value parser.
 - No `cargo audit`/`cargo deny` configuration.
 - No benchmarks.

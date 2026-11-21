@@ -12,7 +12,7 @@ Node.js N-API addon implementation is in the working tree; it builds locally.
 | --- | --- |
 | Crates | 7 — `core`, `sign`, `session`, `axum`, `server`, `node`, `devtool` |
 | Framework/DB assumptions in core | none (zero dependencies) |
-| Tests | 156 (154 unit/integration + 2 doctests; addon has no tests yet) |
+| Tests | 156 Rust tests (154 unit/integration + 2 doctests); one Playwright browser/API test in the sibling React demo |
 | Aux deps | `axum` in the adapter/server; `napi-rs` in the Node addon; `serde_json` in the devtool |
 | Licence | MIT |
 | Persistence | in-memory only |
@@ -219,7 +219,9 @@ cargo doc --workspace --no-deps   # clean
 - [x] Node.js N-API addon implementation exposes the core auth/session API with
       stable sanitized `.code` categories and an addon-owned process-local,
       non-durable `MemoryStore` boundary. Local release build and JavaScript
-      syntax checks pass; no native runtime integration tests are present yet.
+      syntax checks pass. The sibling React demo exercises the addon APIs in
+      Playwright inside a Podman-hosted Node API; there is no crate-local native
+      integration suite.
 
 - [ ] No CI. Nothing runs `fmt`, `clippy`, `test`, `doc` on push.
 - [ ] `cargo clippy` is not installed in the dev toolchain and is not part of any

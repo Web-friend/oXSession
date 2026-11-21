@@ -22,5 +22,12 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Test workspace
         run: cargo test --workspace
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build Node addon
+        run: npm run build --prefix crates/oxsession-node
+      - name: Check Node.js entry point
+        run: node --check crates/oxsession-node/index.js
       - name: Build documentation
         run: cargo doc --workspace --no-deps

@@ -305,7 +305,8 @@ malformed pairs, duplicate names, size and pair limits), prefix rules, credentia
 precedence, the published signing vector and tampering matrix, session expiry
 and sliding, store eviction, every delivery mode, the endpoints end-to-end
 through a real router, and the devtool's option parsing, redaction, and policy
-checks. The Node addon builds but has no runtime test suite yet.
+checks. The companion React demo adds Playwright browser/API coverage for the
+Node addon; its latest run passed one end-to-end test.
 
 The sibling React demo has browser/API checks and a serial benchmark. From
 `React Demo Project`, run `npm install`, install Chromium with
@@ -316,6 +317,24 @@ starts Vite for Playwright, and measures 500 API requests per operation after
 the environment and measured timings; timings are informational and have no
 pass/fail thresholds.
 
+Informational API baseline measured 2026-11-21 on Linux x86_64 (CachyOS kernel
+7.3.3-1), AMD Ryzen 5 3400G (4 cores / 8 threads), host Node.js 26.13.0,
+Playwright 1.65.1 with Chromium 159.0.8154.6, and Podman 6.1.4. The API ran in
+Node 22 Bookworm; the addon was built in Rust Bookworm. Each row reports the
+median and 95th percentile latency in milliseconds and serial throughput in
+requests per second.
+
+| Operation | p50 (ms) | p95 (ms) | Throughput (req/s) |
+|---|---:|---:|---:|
+| Cookie parse | 1.666 | 3.181 | 530.1 |
+| Credential resolve | 1.214 | 2.355 | 734.0 |
+| Sign | 0.798 | 1.529 | 1,103.5 |
+| Verify | 0.763 | 1.474 | 1,133.4 |
+| Session create | 0.873 | 1.624 | 1,021.2 |
+| Session validate | 0.909 | 1.771 | 952.2 |
+| Session rotate | 0.886 | 1.740 | 1,011.9 |
+| Session revoke | 1.405 | 2.382 | 655.2 |
+
 ## Agent skills
 
 Agent-oriented playbooks live in [`skills/`](skills). Start with
@@ -324,8 +343,16 @@ task routing, then load the matching `skills/<name>/SKILL.md`. The index and
 loading instructions are in [`skills/README.md`](skills/README.md).
 
 Run `python3 scripts/validate-agent-setup.py` to check the agent entry points,
-skill index, and Claude Code/OpenCode skill mirrors. CI runs this check together
-with formatting, workspace tests, and the documentation build.
+skill index, and agent skill mirrors. CI runs this check together with
+formatting, workspace tests, the Node addon build, and the documentation build.
+
+The repo has native rule entry points for Devin CLI, Antigravity, Cline, Roo
+Code, and Continue, plus shared skill discovery for Codex and OpenHands.
+Codex, Devin CLI, Antigravity, OpenHands, and Zed also consume `AGENTS.md`
+directly. DeepSeek is supported through whichever agent host loads that
+provider's model; DeepSeek does not currently document a provider-specific
+repository rules format. See [`skills/agents.md`](skills/agents.md) for paths
+and upstream references.
 
 ## Roadmap
 

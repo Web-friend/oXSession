@@ -15,8 +15,8 @@ python3 scripts/validate-agent-setup.py
 ```
 
 The check verifies skill frontmatter, the index, entry-point pointers, and the
-Claude Code/OpenCode symlinks. CI runs the same command so missing or stale
-agent configuration is caught before merge.
+Codex/OpenHands, Claude Code, and OpenCode skill symlinks. CI runs the same
+command so missing or stale agent configuration is caught before merge.
 
 ## Loading a skill
 
@@ -27,13 +27,14 @@ copy to maintain.
 
 | Agent | Discovery path | Status |
 | --- | --- | --- |
+| Codex, OpenHands | `.agents/skills/<name>/SKILL.md` | Mirrored |
 | OpenCode | `.opencode/skills/<name>/SKILL.md` | Mirrored |
 | Claude Code | `.claude/skills/<name>/SKILL.md` | Mirrored |
-| Codex, Cursor, Amp, Jules, Factory | `AGENTS.md` | Supported directly |
+| Codex, Devin CLI, Antigravity, OpenHands, Zed, Amp, Jules, Factory, Cursor | `AGENTS.md` | Supported directly |
 | Claude Code, Gemini CLI, Aider, Copilot, Windsurf | root pointer file | See below |
 
-Pointer files exist for tools that use their own filename. Each one says "read
-`AGENTS.md`" and nothing else, so rules never drift:
+Entry points for tools that use their own filenames or native rule directories
+point back to `AGENTS.md`, so guidance does not drift:
 
 | File | Tool |
 | --- | --- |
@@ -43,6 +44,17 @@ Pointer files exist for tools that use their own filename. Each one says "read
 | `.github/copilot-instructions.md` | GitHub Copilot |
 | `.cursor/rules/oxsession.mdc` | Cursor rules |
 | `.windsurfrules` | Windsurf |
+| `.devin/rules/oxsession.md` | Devin CLI native rules |
+| `.agents/rules/oxsession.md` | Antigravity native rules |
+| `.clinerules/oxsession.md` | Cline |
+| `.roo/rules/oxsession.md` | Roo Code |
+| `.continue/rules/oxsession.md` | Continue |
+
+DeepSeek provides code models rather than a documented repository-level agent
+configuration format. For DeepSeek models used through an agent host, configure
+that host to read `AGENTS.md`; compatible hosts can discover the shared
+`.agents/skills/` mirrors. See the [provider integration notes](agents.md) for
+the supported formats and upstream references.
 
 Do not load every skill at once. Use the routing table in
 [`../AGENTS.md`](../AGENTS.md) and load only what the task needs.

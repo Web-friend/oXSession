@@ -49,18 +49,29 @@ a second copy of the rules:
 
 | File | Tool |
 | --- | --- |
-| `AGENTS.md` | OpenCode, Codex, Cursor, Amp, Jules, Factory |
+| `AGENTS.md` | Codex, Devin CLI, Antigravity, OpenHands, Zed, Amp, Jules, Factory, OpenCode, Cursor |
 | `CLAUDE.md` | Claude Code |
 | `GEMINI.md` | Gemini CLI |
 | `CONVENTIONS.md` | Aider |
 | `.github/copilot-instructions.md` | GitHub Copilot |
 | `.cursor/rules/oxsession.mdc` | Cursor rules |
 | `.windsurfrules` | Windsurf |
+| `.devin/rules/oxsession.md` | Devin CLI native rule |
+| `.agents/rules/oxsession.md` | Antigravity native rule |
+| `.clinerules/oxsession.md` | Cline |
+| `.roo/rules/oxsession.md` | Roo Code |
+| `.continue/rules/oxsession.md` | Continue |
 
 Skills are mirrored into `.opencode/skills/<name>` and `.claude/skills/<name>`
-as relative symlinks to `skills/<name>`. Edit the canonical folder only; the
-mirrors are artifacts. If a tool ignores symlinks, copy the folders or point its
-skill path at `skills/`.
+as relative symlinks to `skills/<name>`. They are also mirrored into
+`.agents/skills/<name>` for Codex and OpenHands. Edit the canonical folder only;
+the mirrors are artifacts. If a tool ignores symlinks, copy the folders or
+point its skill path at `skills/`.
+
+DeepSeek publishes code models, not a coding-agent runtime with a documented
+repository instruction path. When using a DeepSeek model through a host agent,
+that host must load `AGENTS.md` and, where supported, `.agents/skills/`; do not
+add provider-specific config unless the chosen host documents it.
 
 ## Repository map
 
