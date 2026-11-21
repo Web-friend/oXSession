@@ -37,9 +37,30 @@ core.
 2. `docs/sessions.md` — session lifecycle, cookie attributes, store conformance.
 3. `docs/signing.md` — signed-cookie wire format, test vector, Python reference.
 4. `docs/react.md` — browser/React integration, proxy, deployment, pitfalls.
-5. `logs.md` — current status and known gaps. Treat it as a status snapshot, not
-   as truth about behavior: two entries are stale (see below).
-6. `skills/<name>/SKILL.md` — the task-specific playbook.
+5. `docs/devtool.md` — the redacting inspection CLI, exit codes, key handling.
+6. `logs.md` — current status and known gaps. Treat it as a status snapshot, not
+   as truth about behavior; verify claims against the code.
+7. `skills/<name>/SKILL.md` — the task-specific playbook.
+
+## Tool entry points
+
+`AGENTS.md` is the single source of truth. Other agents get a pointer file, not
+a second copy of the rules:
+
+| File | Tool |
+| --- | --- |
+| `AGENTS.md` | OpenCode, Codex, Cursor, Amp, Jules, Factory |
+| `CLAUDE.md` | Claude Code |
+| `GEMINI.md` | Gemini CLI |
+| `CONVENTIONS.md` | Aider |
+| `.github/copilot-instructions.md` | GitHub Copilot |
+| `.cursor/rules/oxsession.mdc` | Cursor rules |
+| `.windsurfrules` | Windsurf |
+
+Skills are mirrored into `.opencode/skills/<name>` and `.claude/skills/<name>`
+as relative symlinks to `skills/<name>`. Edit the canonical folder only; the
+mirrors are artifacts. If a tool ignores symlinks, copy the folders or point its
+skill path at `skills/`.
 
 ## Repository map
 
@@ -51,7 +72,8 @@ core.
 | `crates/oxsession-axum` | `oxsession-axum` | `CookieHeader`, `bearer`, `signed_cookie`, `AuthError`, cookie header helpers | `oxsession-axum` |
 | `crates/oxsession-server` | `oxsession-server` | env `Config`, `AppState`, `/health`, `/me`, `/sessions`, `/logout` | `oxsession-server` |
 | `crates/oxsession-node` | `oxsession-node` | N-API exports, CommonJS façade, `.d.ts`, package build | `oxsession-node` |
-| `docs/` | — | Behavioral contracts and the React guide | — |
+| `crates/oxsession-devtool` | `oxsession-devtool` | Redacting CLI: parse cookie, resolve credential, check `os1`, inspect id, validate policy | `oxsession-devtool` |
+| `docs/` | — | Behavioral contracts, the React guide, and the devtool reference | — |
 | `examples/` | — | `localstorage.js`, a token-mode browser client | `oxsession-react` |
 | `skills/` | — | Agent playbooks | `skills/README.md` |
 
@@ -93,6 +115,9 @@ of the workspace and never compile. Do not extend, import, or copy them.
 cargo fmt --all -- --check
 cargo test --workspace
 
+# Validate agent entry points, skills, and discovery mirrors
+python3 scripts/validate-agent-setup.py
+
 # Documentation build
 cargo doc --workspace --no-deps
 
@@ -104,12 +129,16 @@ AUTH_DEV_LOGIN=1 AUTH_SESSION_DELIVERY=cookie AUTH_SESSION_COOKIE_SECURE=0 \
 npm run build --prefix crates/oxsession-node
 node --check crates/oxsession-node/index.js
 
+# Inspection CLI
+cargo run -p oxsession-devtool -- help
+
 # Focused test runs
 cargo test -p oxsession-core
 cargo test -p oxsession-sign
 cargo test -p oxsession-session
 cargo test -p oxsession-axum
 cargo test -p oxsession-server
+cargo test -p oxsession-devtool
 ```
 
 `cargo clippy` is not installed in this project's dev toolchain and is not part
@@ -129,6 +158,8 @@ Generated artifacts (`target/`, `crates/oxsession-node/oxsession.node`,
 | Env vars, endpoints, delivery modes | `oxsession-server` | `README.md` |
 | Browser/React client, CORS, proxies | `oxsession-react` | `docs/react.md` |
 | N-API exports, JS façade, `.d.ts` | `oxsession-node` | `crates/oxsession-node/README.md` |
+| Debugging a 401, checking an `os1` value, validating TTLs | `oxsession-devtool` | `docs/devtool.md` |
+| Adding a new devtool command | `oxsession-devtool` | `crates/oxsession-devtool/src/main.rs` |
 | Adding or fixing tests | `oxsession-testing` | the crate's existing test modules |
 
 ## Definition of done
@@ -136,20 +167,22 @@ Generated artifacts (`target/`, `crates/oxsession-node/oxsession.node`,
 - `cargo fmt --all -- --check` and `cargo test --workspace` pass.
 - The rule is tested where it lives; HTTP-visible behavior has an endpoint test.
 - Public Rust items are documented and `cargo doc` is clean.
+- `python3 scripts/validate-agent-setup.py` passes when agent instructions or
+  skills change.
 - `README.md` is updated if configuration, endpoints, or delivery changed.
 - `docs/*.md` is updated if a contract changed.
 - The matching `SKILL.md` is updated if the workflow changed.
 - No session ids, key bytes, or unsanitized error details appear in logs, error
   messages, tests, or fixtures.
 
-## Known gaps and stale notes
+## Known gaps
 
 `logs.md` is the status log. Keep it updated when you close a gap. Two entries
-are already stale relative to the code:
+that used to be stale have been removed from it:
 
-- "Sliding expiry does not refresh the cookie" — **fixed**.
+- "Sliding expiry does not refresh the cookie" — fixed.
   `routes.rs` re-issues `Set-Cookie` on every cookie-authenticated `/me`.
-- "`__Host-` / `__Secure-` names fail at request time" — **fixed**.
+- "`__Host-` / `__Secure-` names fail at request time" — fixed.
   `Config::from_env` rejects the prefix/`Secure` mismatch at startup.
 
 Still true and worth remembering: no OIDC, no durable store, no CORS layer, no

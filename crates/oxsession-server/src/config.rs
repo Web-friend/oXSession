@@ -252,6 +252,17 @@ fn secret(encoded: &str) -> Result<SecretKey> {
 mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Serializes tests that mutate the process environment. `set_var` is
+    /// process-global, so tests using it cannot run concurrently.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_lock() -> MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     /// Temporarily overrides an env var and restores it on drop, so tests do
     /// not leak state into each other or into the process environment.
@@ -357,6 +368,7 @@ mod tests {
 
     #[test]
     fn prefixed_cookie_requires_secure_at_startup() {
+        let _env = env_lock();
         for cookie in ["__Host-session", "__Secure-session"] {
             let _cookie = EnvVar::set("AUTH_SESSION_COOKIE", cookie);
             // Without Secure the configuration must fail to load.
@@ -377,6 +389,7 @@ mod tests {
 
     #[test]
     fn non_loopback_bind_requires_secure() {
+        let _env = env_lock();
         let _bind = EnvVar::set("AUTH_BIND_ADDR", "0.0.0.0");
         {
             let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "0");
@@ -393,6 +406,7 @@ mod tests {
 
     #[test]
     fn loopback_bind_without_secure_is_allowed() {
+        let _env = env_lock();
         let _bind = EnvVar::set("AUTH_BIND_ADDR", "127.0.0.1");
         let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "0");
         assert!(Config::from_env().is_ok());
@@ -400,6 +414,7 @@ mod tests {
 
     #[test]
     fn ipv6_loopback_bind_without_secure_is_allowed() {
+        let _env = env_lock();
         let _bind = EnvVar::set("AUTH_BIND_ADDR", "::1");
         let _secure = EnvVar::set("AUTH_SESSION_COOKIE_SECURE", "0");
         assert!(Config::from_env().is_ok());

@@ -463,6 +463,16 @@ name = "oxsession-core"
 version = "0.1.0"
 
 [[package]]
+name = "oxsession-devtool"
+version = "0.1.0"
+dependencies = [
+ "oxsession-core",
+ "oxsession-session",
+ "oxsession-sign",
+ "serde_json",
+]
+
+[[package]]
 name = "oxsession-node"
 version = "0.1.0"
 dependencies = [

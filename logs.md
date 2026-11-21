@@ -3,23 +3,23 @@
 Running status log for oXSession. What is built, what is missing, and what is
 known to be inconsistent.
 
-Last updated: 2026-11-20.
+Last updated: 2026-11-21.
 Node.js N-API addon implementation is in the working tree; it builds locally.
 
 ## Snapshot
 
 | | |
 | --- | --- |
-| Crates | 6 — `core`, `sign`, `session`, `axum`, `server`, `node` |
+| Crates | 7 — `core`, `sign`, `session`, `axum`, `server`, `node`, `devtool` |
 | Framework/DB assumptions in core | none (zero dependencies) |
-| Tests | 141 (139 unit/integration + 2 doctests; addon has no tests yet) |
-| Aux deps | `axum` in the adapter/server; `napi-rs` in the Node addon |
+| Tests | 156 (154 unit/integration + 2 doctests; addon has no tests yet) |
+| Aux deps | `axum` in the adapter/server; `napi-rs` in the Node addon; `serde_json` in the devtool |
 | Licence | MIT |
 | Persistence | in-memory only |
 | Identity provider | none (`POST /sessions` behind `AUTH_DEV_LOGIN`) |
 
 ```
-cargo test --workspace      # 141 passed
+cargo test --workspace      # 156 passed
 cargo fmt --all --check     # clean
 cargo doc --workspace --no-deps   # clean
 ```
@@ -129,21 +129,25 @@ cargo doc --workspace --no-deps   # clean
       delivery, adapter conformance rules, non-goals.
 - [x] [`examples/localstorage.js`](examples/localstorage.js): browser client
       using `localStorage` + Bearer.
+- [x] [`docs/devtool.md`](docs/devtool.md): redacting inspection CLI, exit
+      codes, key handling, and the no-MCP rationale.
+
+### Inspection CLI — `oxsession-devtool`
+
+- [x] Read-only commands: `parse-cookie`, `resolve-credential`,
+      `check-cookie`, `inspect-id`, `policy`, `help`.
+- [x] Credential values are redacted by default; `--reveal*` is per-command and
+      explicit. Signature failures expose only the sanitized category.
+- [x] Keys come from `--key` or a `--key-file`; the tool never reads
+      `AUTH_COOKIE_KEYS` or the process environment.
+- [x] Exit codes: `0` positive, `1` negative, `2` usage, `3` configuration/IO.
+- [x] No store access and no mutating commands (no mint/refresh/rotate/revoke).
+- [x] Tested: 14 unit tests.
 
 ## Missing
 
 ### Correctness / security gaps (fix before calling it production-ready)
 
-- [ ] **Sliding expiry does not refresh the cookie.** `Max-Age` is fixed at
-      mint time (`policy.ttl()`), while the stored `expires_at` slides forward
-      on every `/me`. An active browser is logged out on day 7 even though the
-      session row is still valid. `/me` should re-issue the cookie (and re-sign
-      it) whenever `expires_at` moved.
-- [ ] **`__Host-` / `__Secure-` names fail at request time, not startup.**
-      `AUTH_SESSION_COOKIE=__Host-session` with `AUTH_SESSION_COOKIE_SECURE`
-      unset validates as a name, then `SetCookie::build` fails inside
-      `/sessions` and returns `500`. Config should reject the combination at
-      load.
 - [ ] **`Secure` is not enforced.** Default is off so `http://localhost` works,
       but nothing warns or refuses when the bind address is non-loopback. A
       deployment on a public address silently ships cookies in clear text.
@@ -238,20 +242,17 @@ cargo doc --workspace --no-deps   # clean
 
 | Symptom | Cause |
 | --- | --- |
-| `/me` returns a new `expires_at` but the browser cookie still expires on the original schedule | sliding expiry is store-side; `/me` never re-issues `Set-Cookie` |
-| Config accepts `__Host-` names that cannot be serialized | prefix rules are checked in `SetCookie::build`, not in `Config::from_env` |
 | `both` mode sets a cookie *and* a token that decode to the same id, but only the cookie is signed | signature wraps the carrier, not the id — by design |
 | Duplicate signing key ids fail configuration/rotation | `with_previous` and `rotate` reject ids already in the key ring |
 | A failed logout still returns `204` and clears the cookie | revocation errors are logged, not surfaced |
 
 ## Next steps, in order
 
-1. Cookie re-issue on sliding expiry.
-2. Start the adapter conformance suite, then implement PostgreSQL against it.
-3. Schedule `purge_expired` (or document that the adapter owns sweeping).
-4. Replace `println!`/`eprintln!` with `tracing` and add request ids.
-5. OIDC, so `POST /sessions` stops being the only way in.
-6. CI (fmt, clippy, test, doc, audit) plus a fuzz target for both parsers.
+1. Start the adapter conformance suite, then implement PostgreSQL against it.
+2. Schedule `purge_expired` (or document that the adapter owns sweeping).
+3. Replace `println!`/`eprintln!` with `tracing` and add request ids.
+4. OIDC, so `POST /sessions` stops being the only way in.
+5. CI (fmt, clippy, test, doc, audit) plus a fuzz target for both parsers.
 
 ## Verification log
 
@@ -262,7 +263,8 @@ oxsession-core     unit 32
 oxsession-server   unit 16  bin 0   sessions 31
 oxsession-session  unit 22  doctest 1
 oxsession-sign     unit 9   interop 11  doctest 1
-                                     total 141 passed, 0 failed
+oxsession-devtool  unit 15
+                                     total 156 passed, 0 failed
 
 $ cargo build --workspace          # 0 warnings
 $ cargo doc --workspace --no-deps                              # clean

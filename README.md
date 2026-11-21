@@ -21,6 +21,7 @@ mints and validates real sessions. OIDC providers and JWT issuance come next.
 | [`oxsession-session`](crates/oxsession-session) | Session lifecycle policy, the in-memory store | Axum, HTTP, environment variables |
 | [`oxsession-axum`](crates/oxsession-axum) | Request parts, HTTP status mapping | Parsing, signing, and storage rules |
 | [`oxsession-server`](crates/oxsession-server) | Environment configuration, routes, session delivery, serving | Anything below the adapter |
+| [`oxsession-devtool`](crates/oxsession-devtool) | Local inspection: cookie parsing, credential resolution, signature checks, id/policy validation | Session storage, minting, revocation, serving |
 
 The rule that keeps this honest: **core never sees a `HeaderMap`, a `Router`, a
 `Pool`, or `env::var`.** Every framework, database, and provider is an adapter,
@@ -241,6 +242,33 @@ curl -H 'Authorization: Bearer <session-id>' http://127.0.0.1:3000/me
 `/sessions` exists because there is no identity provider yet. It trusts any
 subject and is therefore off by default.
 
+## Inspect a request
+
+[`oxsession-devtool`](crates/oxsession-devtool) is a local, read-only CLI for the
+values on the wire. It prints JSON, redacts credentials by default, and never
+touches a session store.
+
+```sh
+cargo run -p oxsession-devtool -- parse-cookie --header 'theme=dark; session=abc'
+
+# Why did this request get a 401?
+cargo run -p oxsession-devtool -- resolve-credential \
+  --authorization "$AUTH" --cookie "$COOKIE"
+
+# Verify an os1 value without printing the key or the payload
+cargo run -p oxsession-devtool -- check-cookie \
+  --name session --value "$WIRE" --key-file ~/.config/oxsession/keys.txt
+
+# Check TTLs and the __Host- prefix rule before starting the server
+cargo run -p oxsession-devtool -- policy \
+  --ttl 604800 --absolute 2592000 --cookie-name __Host-session --secure
+```
+
+Exit `0` means the answer is positive, `1` means negative (no credential, bad
+MAC, invalid policy), `2` is a usage error, and `3` is configuration/IO. The full
+command reference, redaction rules, and key handling are in
+[`docs/devtool.md`](docs/devtool.md).
+
 ## Configuration
 
 The library is configured programmatically. Only the optional server binary
@@ -272,11 +300,12 @@ No dotenv files are loaded.
 cargo test --workspace
 ```
 
-141 tests (including two doctests) cover the parser's edge cases (quoted values,
+156 tests (including two doctests) cover the parser's edge cases (quoted values,
 malformed pairs, duplicate names, size and pair limits), prefix rules, credential
 precedence, the published signing vector and tampering matrix, session expiry
-and sliding, store eviction, every delivery mode, and the endpoints end-to-end
-through a real router. The Node addon builds but has no runtime test suite yet.
+and sliding, store eviction, every delivery mode, the endpoints end-to-end
+through a real router, and the devtool's option parsing, redaction, and policy
+checks. The Node addon builds but has no runtime test suite yet.
 
 The sibling React demo has browser/API checks and a serial benchmark. From
 `React Demo Project`, run `npm install`, install Chromium with
@@ -293,6 +322,10 @@ Agent-oriented playbooks live in [`skills/`](skills). Start with
 [`AGENTS.md`](AGENTS.md) for the repository rules, the dependency direction, and
 task routing, then load the matching `skills/<name>/SKILL.md`. The index and
 loading instructions are in [`skills/README.md`](skills/README.md).
+
+Run `python3 scripts/validate-agent-setup.py` to check the agent entry points,
+skill index, and Claude Code/OpenCode skill mirrors. CI runs this check together
+with formatting, workspace tests, and the documentation build.
 
 ## Roadmap
 
